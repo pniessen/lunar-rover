@@ -207,7 +207,7 @@ function drawBuggy(r, game, screenX, by) {
   }
 }
 
-// Shots/enemies/capsules are all empty until Tasks 5/6/9; these loops are the
+// Enemies/capsules are still empty until Tasks 6/9; these loops are the
 // hook-up points and read a `sprite` name off each entity when it exists.
 function drawEntities(r, game, camX) {
   const { ctx, sprites } = r;
@@ -218,7 +218,14 @@ function drawEntities(r, game, camX) {
       ctx.drawImage(img, Math.round(o.x - camX), Math.round(o.y));
     }
   };
-  blit(game.playerShots, 'shotFwd');
+  // Player shots pick their sprite off dir ('fwd' -> shotFwd 2x2, 'up' ->
+  // shotUp 1x4) rather than a generic fallback, since a single shot list
+  // mixes both kinds of sprite.
+  for (const s of game.playerShots) {
+    const img = sprites[s.dir === 'up' ? 'shotUp' : 'shotFwd'];
+    if (!img) continue;
+    ctx.drawImage(img, Math.round(s.x - camX), Math.round(s.y));
+  }
   blit(game.enemyShots, 'bomb');
   blit(game.enemies, 'ufoA');
   blit(game.capsules, 'capsule');

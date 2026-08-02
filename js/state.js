@@ -10,6 +10,7 @@ import {
   buildClassicCourse, createEndlessTerrain, ensureGenerated,
   checkpointIndexAt, checkpointX,
 } from './terrain.js';
+import { updateWeapons } from './weapons.js';
 
 export const DT = 1 / 60;          // fixed simulation timestep, seconds
 export const DYING_TIME = 0.9;     // explosion hold before the respawn
@@ -44,6 +45,7 @@ export function createGame(mode = 'classic', seed = 1) {
     speed: SPEED_BANDS[1],
     camX: 0,
     score: 0,
+    scoreEvents: [],
     lives: 3,
     checkpoint: 0,
     stage: 0,
@@ -128,10 +130,14 @@ export function updateGame(game, input, dt) {
     case 'playing':
       game.stageTime += dt; // stage clock runs only during live play
       updateDrive(game, input, dt, false);
+      updateWeapons(game, input, dt);
       break;
 
     case 'dying':
-      // Buggy is dead: never call updateBuggy/killBuggy here.
+      // Buggy is dead: never call updateBuggy/killBuggy here. Shots already
+      // in flight still fly (and can still score) while the buggy explodes;
+      // fireDual's own phase guard keeps new shots from being fired.
+      updateWeapons(game, input, dt);
       if (game.phaseTimer >= DYING_TIME) {
         if (game.lives <= 0) {
           setPhase(game, 'gameOver');
@@ -144,6 +150,9 @@ export function updateGame(game, input, dt) {
 
     case 'respawning':
       updateDrive(game, input, dt, true);
+      // Invulnerability (skipped terrain collision above) only affects
+      // deaths — the player can still shoot while blinking in.
+      updateWeapons(game, input, dt);
       if (game.phaseTimer >= RESPAWN_TIME) setPhase(game, 'playing');
       break;
 
