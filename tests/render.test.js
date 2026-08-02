@@ -123,3 +123,93 @@ test('consumeFx(simDt=0) still drains game.fx (a paused frame never leaves fx en
   assert.equal(game.fx.length, 0, 'fx is consumed even when the effect layer does not age');
   assert.ok(activeCount(r.particles) > 0, 'the burst it was told about still spawned');
 });
+
+// --- authentic palette invariants -------------------------------------------
+//
+// The whole game now draws from the M52's real colour PROMs. Every value below
+// was decoded from the raw PROM bytes by the research pass and cross-checked
+// against a lossless native-resolution modern-MAME capture — all 20 on-screen
+// colours matched exactly, on both captures, with zero unexplained pixels. See
+// .superpowers/notes/authenticity-research.md §3.
+//
+// 35 colours exist in the entire arcade game (black is shared between PROMs).
+// These tests pin that: nothing in the sprite sheet or the background palette
+// may be a colour the hardware could not produce.
+
+const SPR_PAL = [ // mpc-1.1f, sprite DAC (470-ohm pulldown -> ceiling #C1C8C8)
+  '#00001A', '#C100AE', '#00AEC8', '#84C800', '#C10000', '#00C800', '#840000',
+  '#C1C8C8', '#C1C800', '#845100', '#3E3700', '#3E00C8', '#C19000', '#3E90C8',
+  '#005100',
+];
+const BG_PAL = ['#000000', '#009700', '#00DE51', '#FFDE51', '#0000FF', '#0097AE']; // mpc-3.1m
+const TX_PAL = [ // mpc-4.2a — no pulldown, so this is the only layer that hits #FFFFFF
+  '#210000', '#FF0000', '#FF2100', '#00B800', '#FFFF00', '#976851', '#FF9751',
+  '#FF00AE', '#2147AE', '#B868AE', '#B8FFAE', '#0021FF', '#00B8FF', '#FFFFFF',
+];
+const GAMUT = new Set([...SPR_PAL, ...BG_PAL, ...TX_PAL]);
+
+// Sprites drawn through the SPRITE DAC. The exceptions are the entries in the
+// sprite sheet that are not actually sprites on real hardware:
+//   - mountainFar/mountainNear are BACKGROUND images (bg_pal, no pulldown)
+//   - shotUp is drawn in the TILE layer, VERIFIED as pure #FFFFFF (brief §6.2)
+const NON_SPRITE_LAYER = new Set(['mountainFar', 'mountainNear', 'shotUp']);
+
+function channels(hex) {
+  return [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+}
+
+test('every colour in the sprite sheet is a real M52 PROM colour', async () => {
+  const { SPRITES } = await import('../js/sprites.js');
+  for (const [name, def] of Object.entries(SPRITES)) {
+    for (const [ch, hex] of Object.entries(def.palette)) {
+      assert.ok(GAMUT.has(hex),
+        `sprite ${name} pen '${ch}' is ${hex}, which is not one of the 35 colours the hardware can produce`);
+    }
+  }
+});
+
+test('no sprite exceeds the sprite DAC ceiling — the 470-ohm pulldown means sprites can never be #FFFFFF', async () => {
+  const { SPRITES } = await import('../js/sprites.js');
+  // Channel maxima of the sprite network: 2-bit red tops out at 193 (#C1),
+  // 3-bit green and blue at 200 (#C8). See brief §2.4.
+  const MAX = [0xC1, 0xC8, 0xC8];
+  for (const [name, def] of Object.entries(SPRITES)) {
+    if (NON_SPRITE_LAYER.has(name)) continue;
+    for (const [ch, hex] of Object.entries(def.palette)) {
+      const rgb = channels(hex);
+      for (let i = 0; i < 3; i++) {
+        assert.ok(rgb[i] <= MAX[i],
+          `sprite ${name} pen '${ch}' is ${hex}: channel ${'RGB'[i]} = ${rgb[i]} exceeds the sprite DAC's ${MAX[i]}`);
+      }
+    }
+  }
+});
+
+test('the sprite DAC ceiling test would actually catch a regression', () => {
+  // Guards the test above against silently passing on an empty/renamed set.
+  assert.ok(channels('#FFFFFF')[0] > 0xC1, 'pure white really is out of the sprite gamut');
+  assert.ok(channels('#C1C8C8').every((v, i) => v <= [0xC1, 0xC8, 0xC8][i]), 'the ceiling colour itself passes');
+});
+
+test('STAGE_PALETTES has collapsed to the single authentic palette', async () => {
+  const { STAGE_PALETTES } = await import('../js/render.js');
+  // The array SHAPE is kept on purpose: game.stage indexes it, and the next
+  // pass hooks the real hills<->city-ruins alternation in here.
+  assert.equal(STAGE_PALETTES.length, 5, 'indexing shape preserved for the next pass');
+  for (const p of STAGE_PALETTES) {
+    assert.deepEqual(p, STAGE_PALETTES[0],
+      'the background PROM holds exactly one palette per layer — five re-hued stage themes are not reachable on the hardware');
+  }
+  const p = STAGE_PALETTES[0];
+  assert.equal(p.ground, '#FF9751', 'flat peach regolith');
+  assert.equal(p.sky, '#000000', 'the arcade sky is pure black');
+  assert.equal(p.far.e, '#0000FF', 'distant-mountain peaks');
+  assert.equal(p.far.m, '#0097AE', 'distant-mountain teal body/fill');
+  assert.equal(p.near.e, '#009700', 'hill ridge');
+  assert.equal(p.near.m, '#00DE51', 'hill fill');
+  assert.ok(!('groundTop' in p) && !('groundShade' in p),
+    'the terrain strip is ONE flat colour — no highlight line, no shade band');
+  for (const hex of [p.ground, p.sky, p.star, p.far.e, p.far.m, p.near.e, p.near.m]) {
+    assert.ok(GAMUT.has(hex), `${hex} is not a real M52 PROM colour`);
+  }
+});

@@ -56,7 +56,8 @@ The fix wave (`ef1f38e`, `4bd6f68`) redesigned the fight: deterministic sweep (`
 
 ## Testing conventions
 
-- Run with `node --test tests/*.test.js` — the bare `node --test tests/` form misbehaves on this machine's Node v26. 209 tests, all green.
+- Run with `node --test tests/*.test.js` — the bare `node --test tests/` form misbehaves on this machine's Node v26. 229 tests, all green.
+- **Colours are not a matter of taste on this project.** `.superpowers/notes/authenticity-research.md` holds the decoded M52 colour PROMs, verified twice over; `tests/render.test.js` pins the whole-game 35-colour gamut and the sprite DAC's `#C1C8C8` ceiling. If a new colour is needed, take it from the brief — a value that isn't in the gamut fails the suite.
 - Terrain test doubles: any collision consumer honors `terrain.mode === 'test'` with a bare `features` array.
 - **The load-bearing lesson of this project:** hand-placed projectiles test collision predicates, not gameplay. Any claim that "X can be shot/reached/collected" needs a **real-path reachability test** — a bot that only calls `input.pressed()` driving `updateGame` end to end. Patterns to copy: `playerBot`/`fightWithBot` in `tests/boss.test.js` (~line 1146) and the REACHABILITY tests at the end of `tests/enemies.test.js` (seeded first waves: seed 5 → aimer pair, seed 6 → swooper formation; mutation-verified against removing the up-shot speed carry).
 - Reviewers on this project reproduced bugs empirically (worktree checkouts of pre-fix commits, standalone repro scripts) rather than trusting reports — keep that bar.
@@ -252,6 +253,134 @@ case rather than assuming it.
   was verified live in-browser instead, matching how the rest of the
   presentation layer — `main.js`, `sprites.js`'s `rasterize` — is already
   excluded from `node --test` coverage for the same reason).
+
+## Authentic-palette pass (2026-08-02, post-v1)
+
+The remake's colours were eyeballed. They are now the arcade's actual colours.
+
+**Source of the values.** `.superpowers/notes/authenticity-research.md` — a
+research pass that read the M52's four colour PROMs as plain byte dumps
+(`mpc-1.1f` sprites, `mpc-2.2h` sprite colour sets, `mpc-3.1m` backgrounds,
+`mpc-4.2a` text/tiles), reimplemented MAME's `resnet.cpp`
+`compute_resistor_weights()` against them, and cross-checked the result against
+two lossless native-resolution modern-MAME captures. **All 20 on-screen colours
+matched the decode exactly, on both captures, with zero unexplained pixels.**
+An older capture disagrees in a fully explained way (a legacy MAME build with
+naive palette weights and no sprite pulldown). Treat that brief as the source
+of truth for any future colour question; do not re-eyeball.
+
+The one fact that cannot be guessed: **the sprite palette PROM has red and blue
+bits swapped relative to the char/background PROMs, and its DAC carries a
+470-ohm pulldown on every channel.** So sprites top out at `#C1C8C8` (~76%
+amplitude) and physically cannot be `#FFFFFF`, while the tile layer (HUD text,
+the player's up-shot) reaches full white. That brightness gap between layers is
+a real part of the look, not a bug to correct.
+
+What changed:
+
+- **Terrain strip is one flat `#FF9751` peach** (was `#e05098` hot pink). The
+  highlight line, shade band and procedural dust speckle were **deleted**, not
+  recoloured — the arcade ground band is 100% one colour, and the undulating
+  profile plus the craters carry all the interest. Verified in-browser by
+  histogramming the whole rendered band: **117 504 of 117 504 pixels `#FF9751`,
+  one distinct colour.**
+- **Mountains became filled bands.** `ridgeMap` no longer emits a snow-cap /
+  lit-edge / body / shaded-base four-tone silhouette; it emits two pens — a
+  peak band and a solid fill to the bottom of the strip — because on hardware
+  each background layer is a 2bpp image whose remainder MAME fills with the
+  layer's pen 3. Distant mountains: `#0000FF` blue peaks over `#0097AE` teal.
+  Hills: `#009700` mid-green ridge over `#00DE51` bright green. Band heights
+  went 56→84 and 26→40 px; the arcade's are 98 and ~70 of a 248-row frame, and
+  the brief notes our 384px reframing shows ~2.4x more world per screen, which
+  is exactly what makes thin bands read as sparse. Presentation-only — the
+  strips are drawn from `GROUND_Y` upward and sit behind every entity.
+- **HUD is a lit `#0021FF` blue panel** with a `#00B8FF` cyan sub-panel of the
+  arcade's literal 128px width, positioned so its centre sits at ~59% of our
+  wider buffer against the arcade's ~61%. Text is `#FF2100` red-orange,
+  `#FFFF00` yellow, `#210000` near-black on cyan, `#FFFFFF` white.
+- **The A-Z bar is now a filled bar**, not a 26-tick row: red fill to the
+  player's position over a cyan track, with 1px red dividers at E/J/O/T/Z and
+  the letters above in red. The fill edge *is* the position marker, so the old
+  yellow cursor is gone.
+- **Life icons are drawn in the tile layer** as red-orange pips instead of the
+  buggy sprite squashed to 10x5. Necessary, not cosmetic: the authentic buggy
+  is `#C100AE` magenta and magenta-on-blue at 5px tall was unreadable the
+  moment the panel stopped being near-black.
+- **Buggy is 3 colours** (was 12): `#C100AE` body, `#00001A` outline/wheels,
+  `#00AEC8` trim/hubs. Chassis, forward barrel and vertical mast are all one
+  magenta — there is no white driver, no blue canopy, no grey cannon on the
+  original. The silhouette (32px chassis, three wheels on a ~10px pitch) is
+  unchanged and was already measured correct; only the colour structure was
+  redrawn, as original pixel art. **No ROM bitmaps were transcribed** — the
+  project's no-binary-assets, code-generated-art rule holds. The old comment
+  claiming the body "matches the terrain strip" was backwards and is gone: the
+  original deliberately contrasts magenta against peach.
+- **Rocks are `#845100` brown + `#3E3700` dark tan** (sprite colour set 4, the
+  arcade's exact two). Craters are flat black notches with no rim highlight.
+  UFOs use set 7 (`#C1C800` yellow hull / `#3E90C8` sky-blue dome / `#C10000`
+  lights); explosions use set 3 (`#840000` / `#C1C8C8` / `#C1C800`).
+- **`STAGE_PALETTES` collapsed to one palette.** The five per-stage hue themes
+  cannot be authentic: `mpc-3.1m` is 32 bytes holding five distinct colours and
+  each layer has exactly one colour triple, so the background images physically
+  cannot change hue between stages. The five-element **array shape is kept
+  deliberately** — `game.stage` still indexes it, and the next pass hooks the
+  real variety mechanism in here: the mid-ground alternates hills ↔ city ruins
+  via the background-control port while the distant mountains are always drawn.
+
+**Every colour in the game is now a verified PROM value.** In-browser
+histograms of the live rendered frame: HUD band = `{#0021FF, #00B8FF, #FF2100,
+#210000, #FFFF00}`; mountain band = `{#000000, #0000FF, #0097AE, #FFFFFF}`;
+hill band = `{#0097AE, #00DE51, #009700, #0000FF, #000000, #C100AE, #00001A,
+#845100}`; terrain band = `{#FF9751}`. No strays.
+
+### Deliberate deviations (both documented on purpose)
+
+1. **`HUD_H` stays 36 (15.0%); the arcade's is 48 of 248 (19.4%).** The change
+   is provably invisible to the *simulation* — `HUD_H` is exported by `state.js`
+   but imported only by `render.js` and `hud.js`, and no pure module reads it —
+   but it is **not** invisible to play. The HUD is drawn over the world every
+   frame, and flyer altitudes are absolute constants that know nothing about
+   `HUD_H`: `enemies.js` seeds formations at `baseY` 45–80 and swoopers
+   oscillate that by ±20, so live, lethal enemies reach y ≈ 25. A 46px panel
+   would occlude a further 10px of that airspace on top of the 11px it already
+   hides. Add that the boss sweep (`HOVER_Y` = 70) was painstakingly fixed after
+   the boss was once mathematically unhittable, and there is nothing here worth
+   re-opening. Gameplay legibility outranks the proportion. Noted in a comment
+   at the top of `hud.js`.
+2. **The starfield and the Earth stay.** Verified across three captures, the
+   Moon Patrol sky is pure `#000000` with nothing in it — no stars, no
+   celestial body. Keeping them is this remake's one intentional visual
+   addition, chosen by the user. The sky *colour* underneath is now the
+   authentic black, and the Earth sprite was recoloured into the hardware
+   sprite gamut, so the deviation is a shape choice rather than a palette one.
+
+Lesser, flagged-not-hidden: the tank, chase car, bomb, mine, capsule and
+mothership have **no verified arcade colour set** — the research brief could
+obtain no capture containing any of them and explicitly refused to guess. They
+are coloured from real in-gamut sprite-PROM entries rather than an invented
+hue, and the two extra UFO variants (which the remake needs so swooper /
+aimer / bomber read apart) use real colour sets 8 and D. In-gamut, not
+attributed.
+
+- **Testing.** 223 → 229. Four new tests in `tests/render.test.js` pin the
+  invariants that actually matter: every colour in the sprite sheet is one of
+  the 35 the hardware can produce; no sprite exceeds the sprite DAC's per-
+  channel ceiling (with the three genuinely-not-a-sprite exceptions named);
+  `STAGE_PALETTES` is one palette with no `groundTop`/`groundShade` keys and
+  the array shape intact. Two in `tests/hud.test.js` pin the filled bar
+  (fill fraction, exactly five dividers, clamping past Z, and an explicit
+  "not a 26-tick row" assertion). All mutation-verified — reverting the ground
+  to pink, un-clamping sprite white, and deleting the bar's cyan track each
+  fail the suite. `tests/hud.test.js`'s existing warning-light off-phase
+  constant moved `#5a2018` → `#210000` with the palette.
+- **Verified live in the browser**, not just in Node: attract screen, ordinary
+  driving, buggy close-up and a UFO wave all captured before and after; the
+  pixel histograms above were sampled from the real canvas with the CRT overlay
+  toggled off so the values are the raw buffer. Zero console messages.
+  Known cosmetic side effect: the attract screen's existing 45%-black dim over
+  the whole play area turns the vivid peach regolith muddy brown. It did the
+  same to the old pink, it is needed for the control-hint block's legibility,
+  and it was left alone rather than retuned in a colour pass.
 
 ## Ideas that came up but were never scoped
 
