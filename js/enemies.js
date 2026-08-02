@@ -33,6 +33,7 @@ const AIMER_SHOT_CAP = 2;        // max of an aimer's own shots alive at once
 const AIMER_SHOT_SPEED = 140;    // px/s
 
 const BOMBER_DROP_INTERVAL = 1.5; // seconds between bomb drops
+const BOMBER_DIP_Y = 140;         // low point of the bomber's dip-and-recover altitude cycle
 const BOMB_GRAVITY = GRAVITY * 0.5;
 
 const TANK_SHOT_INTERVAL = 2.5; // seconds between tank shots
@@ -119,16 +120,18 @@ function spawnTank(game) {
 
 function spawnBomber(game) {
   const offset = SPAWN_AHEAD - 60;
+  const y = 60;
   game.enemies.push({
     id: nextId(game),
     kind: 'bomber',
     x: game.buggy.worldX + offset,
-    y: 60,
+    y,
     vx: 0,
     vy: 0,
     hp: 1,
     t: 0,
     hoverOffset: offset,
+    baseY: y,
   });
 }
 
@@ -271,6 +274,13 @@ function updateOneEnemy(game, e, dt) {
     }
     case 'bomber': {
       if (e.hoverOffset != null) e.x = game.buggy.worldX + e.hoverOffset;
+      // Dip-and-recover altitude cycle, synced to the bomb-drop cadence:
+      // starts each interval at baseY, dips down toward BOMBER_DIP_Y around
+      // the midpoint (this is when it's low enough for the forward cannon
+      // to reach it), and climbs back to baseY before the next drop.
+      const base = e.baseY ?? e.y;
+      const frac = (e.t % BOMBER_DROP_INTERVAL) / BOMBER_DROP_INTERVAL;
+      e.y = base + (BOMBER_DIP_Y - base) * Math.sin(Math.PI * frac);
       if (crossedInterval(e.t, dt, BOMBER_DROP_INTERVAL)) dropBomb(game, e);
       break;
     }
@@ -366,15 +376,25 @@ function collideEnemiesVsBuggy(game) {
   const b = game.buggy;
   const hb = buggyHitbox(b);
   for (const e of game.enemies) {
-    if (e.kind !== 'chaser') continue;
-    const w = ENEMY_W.chaser;
-    const overlapsX = e.x < hb.x1 && e.x + w > hb.x0;
-    if (!overlapsX) continue;
-    if (!b.airborne) {
-      killBuggy(game, 'chaser');
-    } else if (!e.dodged) {
-      game.events.push('chaserDodge');
-      e.dodged = true;
+    if (e.kind === 'chaser') {
+      const w = ENEMY_W.chaser;
+      const overlapsX = e.x < hb.x1 && e.x + w > hb.x0;
+      if (!overlapsX) continue;
+      if (!b.airborne) {
+        killBuggy(game, 'chaser');
+      } else if (!e.dodged) {
+        game.events.push('chaserDodge');
+        e.dodged = true;
+      }
+    } else if (e.kind === 'tank') {
+      // Ground obstacle, same ram rule as a chaser: lethal on contact while
+      // grounded, cleared for free by jumping over (jump-over scoring is
+      // Task 7's concern, not this one — no points are awarded here).
+      const w = ENEMY_W.tank;
+      const overlapsX = e.x < hb.x1 && e.x + w > hb.x0;
+      if (overlapsX && !b.airborne) {
+        killBuggy(game, 'tank');
+      }
     }
   }
 }

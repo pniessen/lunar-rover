@@ -56,6 +56,31 @@ test('chaser passing under an airborne buggy emits chaserDodge exactly once, no 
   assert.equal(dodges, 1);
 });
 
+test('tank ram kills a grounded buggy; an airborne buggy clears it unharmed', () => {
+  const g = game();
+  g.buggy.worldX = 100;
+  g.buggy.airborne = false;
+  g.enemies = [{ id: 1, kind: 'tank', x: 100, y: GROUND_Y - 14, vx: 0, vy: 0, hp: 1, t: 0 }];
+
+  updateEnemies(g, DT);
+
+  assert.equal(g.buggy.alive, false);
+  assert.equal(g.buggy.deathCause, 'tank');
+});
+
+test('an airborne buggy overlapping a tank survives (jump-over scoring lands in Task 7)', () => {
+  const g = game();
+  g.buggy.worldX = 100;
+  g.buggy.airborne = true;
+  g.buggy.y = -30;
+  g.enemies = [{ id: 1, kind: 'tank', x: 100, y: GROUND_Y - 14, vx: 0, vy: 0, hp: 1, t: 0 }];
+
+  updateEnemies(g, DT);
+
+  assert.equal(g.buggy.alive, true);
+  assert.equal(g.enemies.length, 1, 'tank is not destroyed by a jump-over, just cleared');
+});
+
 test('up-shot kills a swooper: awards 100 with tag swooper and an explosion event', () => {
   const g = game();
   const e = { id: 1, kind: 'swooper', x: 100, y: 60, vx: 0, vy: 0, hp: 1, t: 0 };
@@ -158,6 +183,30 @@ test('aimer holds fire once 2 of its own shots are already alive', () => {
 
   const own = g.enemyShots.filter((s) => s.from === 1).length;
   assert.equal(own, 2, 'no third shot fired while 2 are already alive');
+});
+
+test('bomber dips low after a drop cycle and becomes hittable by a forward shot', () => {
+  const g = game();
+  g.buggy.worldX = 0;
+  const e = {
+    id: 1, kind: 'bomber', x: 300, y: 60, vx: 0, vy: 0, hp: 1, t: 0, baseY: 60,
+  };
+  g.enemies = [e];
+
+  let sawLow = false;
+  for (let i = 0; i < 200 && !sawLow; i++) {
+    updateEnemies(g, DT);
+    if (g.enemies.length && g.enemies[0].y > 120) sawLow = true;
+  }
+  assert.ok(sawLow, 'bomber should dip above y=120 at some point in its drop cycle');
+
+  // Catch it mid-dip with a forward shot at its current (low) position.
+  const bomber = g.enemies[0];
+  g.playerShots = [{ x: bomber.x, y: bomber.y, vx: 300, vy: 0, dir: 'fwd' }];
+  updateEnemies(g, DT);
+
+  assert.equal(g.enemies.length, 0, 'bomber destroyed');
+  assert.ok(g.scoreEvents.some((ev) => ev.tag === 'bomber' && ev.base === 200));
 });
 
 test('tank fires a level shot every 2.5s', () => {
