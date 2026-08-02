@@ -8,7 +8,7 @@ import {
 } from './buggy.js';
 import {
   buildClassicCourse, createEndlessTerrain, ensureGenerated,
-  checkpointIndexAt, checkpointX, featuresInRange, clearZone, STAGE_BREAKS,
+  checkpointIndexAt, checkpointX, featuresInRange, clearNaturalZone, STAGE_BREAKS,
   CHECKPOINT_SPACING,
 } from './terrain.js';
 import { fireDual, updateWeapons } from './weapons.js';
@@ -29,7 +29,24 @@ export const DT = 1 / 60;          // fixed simulation timestep, seconds
 export const DYING_TIME = 0.9;     // explosion hold before the respawn
 export const RESPAWN_TIME = 1.0;   // invulnerable blink-in, buggy already drivable
 export const STAGE_CLEAR_TIME = 2.5; // scripted intermission while the stage bonus tallies
-export const BOSS_ARENA_LEN = 1600;  // px of terrain cleared ahead of a stage-break checkpoint
+// The boss arena is a ROLLING clear, not a fixed carve-out: this is how far
+// ahead of the buggy natural terrain is kept swept, re-applied every frame of
+// a fight (see maintainBossArena). It replaced a fixed BOSS_ARENA_LEN = 1600
+// measured from the checkpoint line, which was only ~8-11s of driving against
+// fights that now run 26-65s — so 80%+ of every fight happened over live
+// craters/rocks/mines that the duel was never designed around.
+//
+// 800px is sized off the two things that have to fit inside it:
+//   - the boss's own bomb carpet lands at +260..+558 (BOMB_OFFSETS + the 28px
+//     crater width), so the ground it craters is always already swept and
+//     addBombCrater never gets rejected for overlapping a natural feature;
+//   - the viewport only shows ~+274px ahead of the buggy at top speed
+//     (VIEW_W 384 minus buggyScreenX's 110), so nothing natural is ever even
+//     drawn during a fight.
+// Plus ~240px of margin on the bomb reach. Bigger would work too but costs
+// dead road: the sweep stops the instant the boss dies, so whatever is still
+// swept at that moment is empty road the player coasts through afterwards.
+export const BOSS_ARENA_AHEAD = 800;
 export const VIEW_W = 384;
 export const VIEW_H = 240;
 export const GROUND_Y = 200;       // top of the terrain strip
@@ -273,6 +290,7 @@ function scoreJump(game, jumpStartX, landX) {
  */
 function updateDrive(game, input, dt, invulnerable) {
   ensureGenerated(game.terrain, game.buggy.worldX + GENERATE_AHEAD);
+  maintainBossArena(game);
 
   const wasAirborne = game.buggy.airborne;
   updateBuggy(game, input, dt);
@@ -299,7 +317,7 @@ function updateDrive(game, input, dt, invulnerable) {
     game.checkpoint = cp;
     game.events.push('checkpoint');
     if (game.mode === 'classic' && !invulnerable && STAGE_BREAKS.includes(cp)) {
-      enterBoss(game, cp);
+      enterBoss(game);
     }
   }
 
@@ -314,13 +332,55 @@ function updateDrive(game, input, dt, invulnerable) {
 }
 
 /**
+ * maintainBossArena(game) — the rolling boss arena. Keeps BOSS_ARENA_AHEAD px
+ * of road ahead of the buggy free of naturally generated terrain for as long
+ * as a boss is alive, so the duel stays a duel for its whole duration rather
+ * than for the first eight seconds of it.
+ *
+ * Three things about this are deliberate:
+ *
+ *  1. **It follows the buggy, not the checkpoint line.** The original arena
+ *     was a one-shot 1600px carve at the break line. Fights run 26-65s (see
+ *     boss.js's PACING block) — 3500-13000px of road — and a mid-fight death
+ *     extends that further, so any fixed constant is a guess that a long
+ *     fight outruns. A window anchored on `buggy.worldX` cannot be outrun by
+ *     construction.
+ *  2. **It spares `bombCrater`.** clearNaturalZone's whole reason for
+ *     existing: the carpet lands 260-530px ahead, i.e. inside this window,
+ *     so a type-blind clear would delete the boss's attack a frame or two
+ *     after it landed. The player's hazard during a fight is exactly the
+ *     hazard the boss made.
+ *  3. **Generate, then clear.** Endless terrain is produced on demand, so a
+ *     chunk that materializes this frame has to be swept this frame — the
+ *     ensureGenerated call here is what guarantees the clear below is
+ *     operating on the final feature list rather than racing it. (In
+ *     practice updateDrive has already generated to +GENERATE_AHEAD, which
+ *     is well past this window; the call is kept so this function is correct
+ *     standalone, e.g. from enterBoss/enterEndlessBoss.)
+ *
+ * Gated on `game.boss` rather than `game.phase === 'boss'` so it also runs
+ * through a mid-fight death's 'respawning' frames — the buggy respawns
+ * *behind* its death position, over road this sweep already cleared, and the
+ * sweep has to keep up as it drives forward again. It stops the frame the
+ * boss dies (hitBoss nulls game.boss), so the stageClear intermission and
+ * everything after it see live terrain again.
+ */
+function maintainBossArena(game) {
+  if (!game.boss) return;
+  const x0 = game.buggy.worldX;
+  const x1 = x0 + BOSS_ARENA_AHEAD;
+  ensureGenerated(game.terrain, x1);
+  clearNaturalZone(game.terrain, x0, x1);
+}
+
+/**
  * Diverts a stage-break checkpoint crossing (E/J/O/T/Z — every entry in
  * STAGE_BREAKS, as of Task 12) into the 'boss' phase instead of straight
- * into 'stageClear'. Carves a BOSS_ARENA_LEN-px arena out of the terrain
- * starting at the checkpoint line (clearZone) so the fight is a fair
- * dodge-and-shoot duel — no pre-placed craters/rocks/mines, just whatever
- * the boss itself drops (bombCarpet's bombs still crater the ground on
- * impact, same as a regular bomber's). Also clears any regular wave
+ * into 'stageClear'. Opens the rolling arena (maintainBossArena) so the
+ * fight starts on clear ground and stays that way — no pre-placed
+ * craters/rocks/mines, just whatever the boss itself drops (bombCarpet's
+ * bombs still crater the ground on impact, same as a regular bomber's, and
+ * those craters are explicitly exempt from the sweep). Also clears any regular wave
  * enemies/enemy shots still alive from just before the break line (a tank
  * or a stray aimed shot that crossed into the "cleared" arena would
  * otherwise still be able to ram/shoot the buggy during the fight,
@@ -332,12 +392,11 @@ function updateDrive(game, input, dt, invulnerable) {
  * in the same-frame boss/buggy-death race, resumeAfterRespawn does once
  * the death cycle finishes) — this just delays it behind the fight.
  */
-function enterBoss(game, checkpointIdx) {
-  const arenaStart = checkpointX(checkpointIdx);
-  clearZone(game.terrain, arenaStart, arenaStart + BOSS_ARENA_LEN);
+function enterBoss(game) {
   game.enemies = [];
   game.enemyShots = [];
-  startBoss(game);
+  startBoss(game);        // must precede maintainBossArena — it gates on game.boss
+  maintainBossArena(game);
   setPhase(game, 'boss');
 }
 
@@ -345,24 +404,28 @@ function enterBoss(game, checkpointIdx) {
  * Endless-mode boss entry (Task 13): triggered by elapsed run time
  * (game.elapsedTotal >= game.nextBossAt, checked once per 'playing' frame
  * in updateGame) rather than a checkpoint line — endless has no
- * checkpoints/stage-breaks to anchor to. The arena is the same
- * BOSS_ARENA_LEN-px clear zone as classic's enterBoss, just started at the
- * buggy's current worldX instead of a checkpoint line. Difficulty scales
- * the same 12+stage*6 (or 40hp/two-phase at stage 4) curve as classic —
+ * checkpoints/stage-breaks to anchor to. The arena is the same rolling
+ * clear as classic's enterBoss (maintainBossArena — which is anchored on the
+ * buggy in both modes, so there is nothing mode-specific left about it).
+ * It matters more here than in classic: endless terrain is generated on
+ * demand as the buggy advances, so every chunk a fight drives into is born
+ * *during* the fight, and the sweep is the only thing that ever sees it.
+ *
+ * Difficulty scales on the same BASE_HP+stage*HP_PER_STAGE curve as classic
+ * (18/24/30/36, or FINAL_HP's two-phase fight at stage 4) —
  * game.stage is set here, before startBoss reads it, from elapsed time
  * rather than segment index; once a run runs long enough (elapsed >= 360s)
- * every subsequent boss is the stage-4 "final" 40hp two-phase fight, which
+ * every subsequent boss is the stage-4 "final" FINAL_HP two-phase fight, which
  * is the intended cap for an endlessly-scaling difficulty curve.
  * game.nextBossAt advances immediately (not after the fight ends), per the
  * brief's "game.nextBossAt = 90 then += 90".
  */
 function enterEndlessBoss(game) {
-  const arenaStart = game.buggy.worldX;
-  clearZone(game.terrain, arenaStart, arenaStart + BOSS_ARENA_LEN);
   game.enemies = [];
   game.enemyShots = [];
   game.stage = Math.min(4, Math.floor(game.elapsedTotal / 90));
-  startBoss(game);
+  startBoss(game);        // must precede maintainBossArena — it gates on game.boss
+  maintainBossArena(game);
   setPhase(game, 'boss');
   game.nextBossAt += 90;
 }
@@ -788,10 +851,11 @@ export function updateGame(game, input, dt, seed) {
       // Stage-break mothership fight (Task 12). The buggy drives/jumps/
       // fires exactly as in 'playing' — spawnDirector is the only system
       // withheld (no regular enemy waves during a boss fight); terrain
-      // collision stays active via updateDrive (the arena was cleared by
-      // enterBoss, so the only hazards are craters the boss's own bombs
-      // leave behind on impact, via the normal bomb-vs-terrain path in
-      // enemies.js's updateEnemies).
+      // collision stays active via updateDrive, which also re-sweeps the
+      // rolling arena every frame (maintainBossArena), so the only hazards
+      // for the whole fight are craters the boss's own bombs leave behind on
+      // impact, via the normal bomb-vs-terrain path in enemies.js's
+      // updateEnemies.
       game.stageTime += dt; // time bonus stays meaningful through a boss fight
       tickEndlessClock(game, dt); // endless-only: run clock + speed ramp keep advancing through a fight
       updateDrive(game, input, dt, false);

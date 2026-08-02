@@ -198,24 +198,60 @@ const BOX_PAD_Y = 3;
 // comment right here used to claim a "30-60s guardrail" it did not meet.
 //
 // Measured end to end through updateGame with the tests/boss.test.js bot
-// (4 shots/s, cruise band 1, jump-the-craters, not dying), which is what the
-// PACING tests in tests/boss.test.js assert +/-25% windows around:
+// (cruise band 1, jump-the-craters, not dying), which is what the PACING
+// tests in tests/boss.test.js assert +/-25% windows around:
 //
-//   stage 0  18hp  22.6s   (was 12hp, 11.2s)
-//   stage 1  24hp  30.9s   (was 18hp, 18.4s)
-//   stage 2  30hp  38.9s   (was 24hp, 28.9s)
-//   stage 3  36hp  48.3s   (was 30hp, 38.5s)
-//   final    46hp  63.4s   (was 40hp, 48.3s) — phase 2 engages at hp<=20
+//   stage 0  18hp  26.6s   (was 12hp, ~11s before the polish pass)
+//   stage 1  24hp  32.1s
+//   stage 2  30hp  39.9s
+//   stage 3  36hp  49.5s
+//   final    46hp  64.5s   — phase 2 engages at half hp, 30.3s + 34.3s
+//
+// Each of those is a MEDIAN over seven fire cadences (a shot every 12..18
+// frames), not a single run, and that is not incidental precision. The bot
+// fires on a fixed period against a 4.2s sweep, so a given cadence can lock
+// into a resonance where its shots repeatedly arrive at boss altitude just as
+// the mothership leaves the up-gun column — cadence 12 turns the stage-2 fight
+// into 92s and cadence 16 turns the stage-3 fight into 105s, while their
+// neighbours land on 38.5s and 45.1s. Those outliers are a property of a
+// metronome, not of the fight; a human's cadence drifts and averages out. A
+// single-cadence measurement was measuring the phase alignment, which is why
+// this table (and the tests) take the median.
 //
 // Band 0 tracks band 1 closely; band 2 runs longer on the middle stages
 // because the bot spends more of the fight airborne over craters. Those bands
 // are not asserted: the bot's fixed 1.0s jump arc makes it a much weaker
 // driver than a human at the extremes, so a tight bound there would be
 // measuring the bot rather than the fight.
+//
+// These numbers are unchanged (four of the five bit-identical) by the rolling
+// boss arena in state.js, which was the point of checking: sweeping the level
+// out of the fight was not supposed to make the fight easier, only to stop it
+// being decided by a crater cluster the duel was never designed around. The
+// one that moved is stage 2, and only for a bot with no shield: over live
+// terrain it died repeatedly at worldX~20696 and took a 109s median to finish
+// a 39.9s fight.
 const BASE_HP = 18;           // stage-0 boss — the first one the player meets
 const HP_PER_STAGE = 6;       // linear escalation across E/J/O/T
-const FINAL_HP = 46;          // the Z course-end boss, a step above stage 3
-const FINAL_PHASE2_HP = 20;   // the final boss enters phase2 at hp<=20
+export const FINAL_HP = 46;   // the Z course-end boss, a step above stage 3
+// The finale's phase-2 threshold is DERIVED from FINAL_HP, not a free number:
+// "phase 2 is the second half of the fight" is the design, so the two have to
+// move together. They came apart in the polish pass — FINAL_HP went 40 -> 46
+// while this stayed at the literal 20 it had been back when 20 *was* half of
+// 40 — which silently pushed the transition from 50% of the bar to 43% and
+// nothing documented it as intended. Restored, and measured (band 1, the
+// tests/boss.test.js bot, median of seven fire cadences):
+//
+//              phase 1   phase 2   total   split
+//   hp<=20      35.5s     28.9s    64.5s   55/45
+//   hp<=23      30.3s     34.3s    64.5s   47/53
+//
+// The total is unchanged — no surprise, since damage throughput is a property
+// of the sweep geometry and not of where the phase line sits — so this costs
+// nothing and buys back the even split. It reads as 53% by time rather than
+// exactly 50% because phase 2's faster patterns put the boss in the air more,
+// which is a wash for the up gun but slightly widens the dive rotation.
+export const FINAL_PHASE2_HP = Math.floor(FINAL_HP / 2); // == 23
 const PHASE2_SPEED_MULT = 0.7; // phase2 shortens hover/telegraph (faster fight)
 
 // --- hp scaling --------------------------------------------------------------

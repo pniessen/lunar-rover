@@ -7,10 +7,10 @@
 //   { features: Feature[] (x-sorted), nextId, generatedTo, mode, courseId?, seed? }
 // A `Feature` looks like: { id, type, x, w, hp, destroyed }
 //
-// Design note for `clearZone(terrain, x0, x1)` (Task 12, below): features
-// live in a flat, x-sorted array keyed by stable numeric `id`, so removing
-// every feature whose range overlaps [x0,x1) is a simple filter/scan — no
-// separate per-segment bookkeeping to unwind.
+// Design note for `clearNaturalZone(terrain, x0, x1)` (Task 12, below):
+// features live in a flat, x-sorted array keyed by stable numeric `id`, so
+// removing every feature whose range overlaps [x0,x1) is a simple
+// filter/scan — no separate per-segment bookkeeping to unwind.
 
 import { mulberry32 } from './rng.js';
 
@@ -279,16 +279,36 @@ export function addBombCrater(terrain, x) {
   return feature;
 }
 
+// Every feature type the generators above can emit. `bombCrater` is the one
+// type NOT in here: it is not generated terrain at all, it is the scar a
+// bomb leaves on impact (see addBombCrater), and the boss arena depends on
+// that distinction — see clearNaturalZone.
+export const NATURAL_TYPES = new Set([
+  'crater', 'bigCrater', 'doubleCrater', 'rock', 'bigRock', 'mine',
+]);
+
 /**
- * clearZone(terrain, x0, x1) — removes every feature overlapping [x0, x1)
- * outright (rather than merely marking it `destroyed`), so a boss arena
- * (Task 12) is guaranteed free of both live and rubble hazards — a
- * `destroyed` feature still occupies a slot `featuresInRange` would return,
- * which callers elsewhere (e.g. jump-over scoring) treat specially, so a
- * clean removal is the least surprising way to guarantee "nothing here."
+ * clearNaturalZone(terrain, x0, x1) — removes every NATURALLY GENERATED
+ * feature overlapping [x0, x1) outright (rather than merely marking it
+ * `destroyed`), so a boss arena (Task 12) is guaranteed free of both live
+ * and rubble hazards — a `destroyed` feature still occupies a slot
+ * `featuresInRange` would return, which callers elsewhere (e.g. jump-over
+ * scoring) treat specially, so a clean removal is the least surprising way
+ * to guarantee "nothing here."
+ *
+ * It deliberately does NOT touch `bombCrater` features, and that exclusion
+ * is load-bearing rather than incidental. state.js re-applies this every
+ * frame of a boss fight over a window that runs ~800px ahead of the buggy
+ * (see maintainBossArena), while the boss's own carpet lands 260-530px
+ * ahead (BOMB_OFFSETS) — squarely inside that window. A type-blind sweep
+ * would therefore delete each crater within a frame or two of it opening
+ * and erase the boss's entire ground attack, turning the fight into a
+ * shooting gallery. The arena clears the LEVEL, not the fight.
  */
-export function clearZone(terrain, x0, x1) {
-  terrain.features = terrain.features.filter((f) => !(f.x < x1 && f.x + f.w > x0));
+export function clearNaturalZone(terrain, x0, x1) {
+  terrain.features = terrain.features.filter(
+    (f) => !(NATURAL_TYPES.has(f.type) && f.x < x1 && f.x + f.w > x0),
+  );
 }
 
 export function destroyFeature(terrain, id) {
