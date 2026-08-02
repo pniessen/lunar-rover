@@ -16,6 +16,7 @@ import { mulberry32 } from './rng.js';
 import {
   award, featuresJumped, stageBonus, SCORES, STAGE_PAR, COURSE_BONUS,
 } from './score.js';
+import { createCombo, updateCombo, resetCombo } from './combo.js';
 
 export const DT = 1 / 60;          // fixed simulation timestep, seconds
 export const DYING_TIME = 0.9;     // explosion hold before the respawn
@@ -47,6 +48,10 @@ const JUMP_TAG_BY_TYPE = {
   rock: 'rockJump',
   bigRock: 'rockJump',
 };
+
+// Crater-family types (as opposed to mine/rock) — used to decide whether a
+// landed jump counts as a combo-worthy "crater near-miss" (Task 10).
+const CRATER_TYPES = new Set(['crater', 'bigCrater', 'bombCrater', 'doubleCrater']);
 
 const GENERATE_AHEAD = 2400;       // endless terrain lookahead, px
 
@@ -89,7 +94,7 @@ export function createGame(mode = 'classic', seed = 1) {
     enemies: [],
     capsules: [],
     powerup: null,
-    combo: { count: 0, mult: 1, timer: 0 },
+    combo: createCombo(),
     rngSeed: seed,
     // Independent stream from the terrain/course rng so wave timing/picks
     // never perturb (or get perturbed by) terrain generation.
@@ -118,6 +123,12 @@ function anyPressed(input) {
  * Awards jump-over points for every non-destroyed feature (crater family,
  * mine, rock family) fully cleared between jumpStartX and landX, plus a
  * tankJump bonus for any tank enemy fully cleared in the same span.
+ *
+ * Also signals a combo-worthy near-miss (Task 10): landing at top speed
+ * band (band 2) having cleared at least one live crater-family feature
+ * pushes 'craterNearMiss' to game.events. This is an internal-only event —
+ * no HUD/audio handler needed, since audio.js ignores unrecognized event
+ * names — consumed solely by combo.js's updateCombo.
  */
 function scoreJump(game, jumpStartX, landX) {
   const terrain = game.terrain;
@@ -129,6 +140,11 @@ function scoreJump(game, jumpStartX, landX) {
     if (f.destroyed) continue;
     const tag = JUMP_TAG_BY_TYPE[f.type];
     if (tag) award(game, SCORES[tag], tag);
+  }
+
+  if (game.buggy.band === 2
+      && cleared.some((f) => !f.destroyed && CRATER_TYPES.has(f.type))) {
+    game.events.push('craterNearMiss');
   }
 
   for (const e of game.enemies) {
@@ -178,6 +194,7 @@ function updateDrive(game, input, dt, invulnerable) {
   if (cause && killBuggy(game, cause)) {
     game.lives -= 1;
     setPhase(game, 'dying');
+    resetCombo(game);
   }
 }
 
@@ -294,7 +311,19 @@ export function updateGame(game, input, dt) {
       if (game.phase === 'playing' && !game.buggy.alive) {
         game.lives -= 1;
         setPhase(game, 'dying');
+        resetCombo(game);
       }
+      // Combo updates LAST, after every award-generating system above has
+      // run this frame — any comboAction detected here (new scoreEvents,
+      // a chaser dodge, a crater near-miss) raises the multiplier for
+      // *next* frame's awards only, so this frame's own awards were never
+      // inflated by the combo bump they themselves caused. Guarded on
+      // phase still being 'playing' so a same-frame death (which already
+      // called resetCombo above) doesn't immediately re-tick the timer;
+      // this also means the combo timer is frozen (does not tick down)
+      // during stageClear/dying/respawning/boss — only 'playing' frames
+      // advance it.
+      if (game.phase === 'playing') updateCombo(game, dt);
       break;
 
     case 'dying':
