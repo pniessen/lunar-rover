@@ -784,7 +784,14 @@ function drawOverlays(r, game, screenX, by) {
  */
 export function render(r, game, alpha, simDt = DT) {
   const { ctx } = r;
-  r.tick++;
+  // Gated on !game.paused (same pattern as `moving` below and consumeFx's
+  // simDt=0 freeze): r.tick is the sole clock behind the mine flash, boss
+  // telegraph flash, and bomb-marker blink (see their r.tick reads above).
+  // The cosmetic-polish pass froze particles/shake/HUD-blink while paused
+  // but left this one still advancing every rendered frame, so those three
+  // animations kept animating under the PAUSED overlay. Finishing that sweep
+  // — intentional, small behavior change, verified visually (see BUILD-LOG).
+  if (!game.paused) r.tick++;
 
   const pal = STAGE_PALETTES[game.stage] || STAGE_PALETTES[0];
   const b = game.buggy;

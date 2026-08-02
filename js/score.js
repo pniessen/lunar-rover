@@ -44,6 +44,17 @@ export const COURSE_BONUS = 5000;
  * score is monotonic — but this keeps the guarantee explicit rather than
  * relying on that invariant).
  */
+// game.scoreEvents grows unbounded for the life of a run (~40 bytes/event,
+// so not urgent — a long run is thousands of events, not millions). It is
+// deliberately left that way: combo.js keeps non-destructive INDEX cursors
+// into this exact array (lastSeenScoreEventCount, fast-forwarded by
+// syncComboCursors — see that module's docstring), and two shipped bugs have
+// already lived in that cursor logic. Any trim/compact of this array has to
+// atomically rewrite every outstanding cursor in the same breath, with tests
+// covering compaction mid-combo-streak, across a death, and across a
+// stageClear tally, or it silently reintroduces a class of bug this project
+// has already paid for twice. Deferred rather than forced — see
+// docs/BUILD-LOG.md's open-issues list.
 export function award(game, base, tag) {
   if (!game.scoreEvents) game.scoreEvents = [];
   if (!game.extraLivesGranted) game.extraLivesGranted = [];

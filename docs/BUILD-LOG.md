@@ -67,7 +67,7 @@ The fix wave (`ef1f38e`, `4bd6f68`) redesigned the fight: deterministic sweep (`
 2. ~~Stage-0 boss dies fast / false "30-60s guardrail" comment~~ — **fixed in the boss-polish pass** (see below).
 3. ~~Boss bomb carpet falls entirely off-screen~~ — **fixed in the boss-polish pass** (see below).
 4. ~~Cosmetics: boss clips ~4px off-canvas at band-0 sweep extreme; particles/shake animate during pause; boss freezes mid-air during death then snaps on resume; `hud.js` `hudTime += DT` per draw couples blink rate to refresh rate~~ — **fixed in the cosmetic-polish pass** (see below). Remaining cosmetic item: per-frame `loadScores()` JSON.parse.
-5. **Code-quality deferred:** score literals in `weapons.js`/`enemies.js` not sourced from `SCORES`; `TANK_W` duplicated in `state.js`; `scoreEvents` grows unbounded within a run; unused `astronaut` sprite; dead `minOffset` conditional in `terrain.js`.
+5. ~~Code-quality deferred: score literals in `weapons.js`/`enemies.js` not sourced from `SCORES`; `TANK_W` duplicated in `state.js`; unused `astronaut` sprite; dead `minOffset` conditional in `terrain.js`; hardcoded `BOMB_MARK_W`/unexported `BOSS_W`; mine/boss-telegraph/bomb-marker flash still animated during pause; no `.gitignore`~~ — **fixed in the code-quality pass** (see below), except `scoreEvents` unbounded growth, deliberately left — see that section.
 6. **Never verified on a real touch device** — touch logic is code-reviewed + viewport-tested only.
 
 ## Boss-polish pass (2026-08-02, post-v1)
@@ -168,6 +168,87 @@ throughout.
   nothing; freezes during a dive same as `updateBoss`; the per-frame formula
   invariant above). All new tests mutation-verified against reverting each
   fix.
+
+## Code-quality pass (2026-08-02, post-v1)
+
+A hygiene-only sweep closing item 5 above. Every change is a refactor or
+docs/test fix — no gameplay constant, scoring value, or arena-clearing logic
+was touched, and the whole point of the exercise was proving that in each
+case rather than assuming it.
+
+- **Score literals now route through `SCORES`.** `weapons.js`'s `rockShot`
+  award and `enemies.js`'s `swooper`/`aimer`/`bomber`/`tankShot`/`formation`
+  awards used to hardcode the same numbers `js/score.js`'s `SCORES` table
+  already defines. Both files now import `SCORES` and pass `SCORES.<tag>`
+  instead of the literal. The chaser kill's randomized `[500, 800, 1000]`
+  payout is deliberately untouched — it has no single fixed value, so there
+  is nothing in the table to route it through. Verified two ways: the full
+  suite (unchanged, 223 green) and a standalone instrumented script driving
+  `hitEnemy`/`updateWeapons` directly and asserting every awarded value
+  against `SCORES` — same numbers before and after for all five tags.
+- **`TANK_W` de-duplicated.** `state.js` redefined a copy (20) of what
+  `enemies.js` already tracks internally as `ENEMY_W.tank`. `enemies.js` now
+  exports `ENEMY_W`; `state.js` imports it and reads `ENEMY_W.tank` at the one
+  call site (`scoreJump`'s tank-jump check), removing the local constant.
+  Safe across the existing `state.js`⇄`enemies.js` import cycle by the same
+  rule documented at both files' top: the import is only ever dereferenced
+  inside a function body, deferred to call time, never at module top level.
+- **Dead conditional collapsed in `terrain.js`.** Both `buildSegmentFeatures`
+  and `buildChunkFeatures` computed `startOffset = Math.max(300, minOffset)`
+  where `minOffset` (200 or 150 depending on segment/chunk index) is always
+  less than 300 — so the branch was dead and implied a per-segment safe zone
+  that never existed. Both now read `const startOffset = 300;` with a comment
+  pointing at the real, constant 300px guarantee that `state.js`'s `respawn()`
+  docstring already depends on and cites explicitly.
+- **Unused `astronaut` sprite removed** from `js/sprites.js` — grep-confirmed
+  zero references anywhere in `js/` or `tests/`; the driver is baked directly
+  into `buggyBody` and was never drawn.
+- **`BOMB_MARK_W` now imports the real constant.** `render.js` used to
+  hardcode `28` with a comment asserting it equals `FEATURE_W.bombCrater`.
+  It now imports `FEATURE_W` from `terrain.js` (already importing
+  `featuresInRange` from the same module, so no new import cycle) and reads
+  `FEATURE_W.bombCrater` directly, so the two values can't drift apart again.
+- **`BOSS_W` exported.** `boss.js`'s internal 48px boss-sprite-width constant
+  is now `export const BOSS_W`. `tests/render.test.js` used to hardcode a
+  local `BOSS_SPRITE_W = 48` mirror with a comment explaining why it couldn't
+  import the real thing; it now imports `BOSS_W` directly.
+- **Mine flash / boss telegraph flash / bomb-marker blink now freeze during
+  pause too — finishing the cosmetic-polish pass's job.** That pass froze
+  particles, screen shake, and the HUD blink while paused but missed these
+  three, because all three read `r.tick` (render.js's own frame counter)
+  rather than sim time, and `r.tick++` ran unconditionally on every rendered
+  frame regardless of `game.paused`. Now gated the same way as the `moving`
+  flag just below it: `if (!game.paused) r.tick++;`. **This is the one small,
+  deliberate behavior change in this pass** (everything else is a pure
+  refactor) — verified by driving `render()` directly through a scratch
+  harness (not committed) with a mine, an active boss telegraph, and an
+  airborne bomb all on screen simultaneously: 90 repeated `render()` calls
+  while `game.paused` produced byte-identical canvas pixel hashes and a
+  frozen `r.tick`, while the same 90 calls with `paused` cleared changed both
+  (tick 0→90, hash changed) — confirming both that the freeze works and that
+  the harness would have caught a regression. No console errors either run.
+- **`.gitignore` added.** The repo had none; `.superpowers/` (agent scratch —
+  task briefs, review diffs) sat untracked where a stray `git add -A` could
+  commit it. Ignores `.superpowers/`, `.DS_Store`, and (pre-emptively, since
+  none exists yet) `node_modules/`. Does **not** ignore `.claude/launch.json`
+  — that file is tracked and wanted.
+- **`scoreEvents` unbounded growth — deliberately NOT fixed.** `game.
+  scoreEvents` grows for the whole run (~40 bytes/event, not urgent). `combo.
+  js` keeps non-destructive index cursors into this exact array
+  (`lastSeenScoreEventCount`), and two shipped bugs have already lived in
+  that cursor logic (see the Task 10 and Task 12 rows in the task table
+  above). Compacting the array safely means atomically rewriting every
+  outstanding cursor in the same operation, with tests covering compaction
+  mid-combo-streak, across a death, and across a stageClear tally. That's a
+  real feature of its own, not a hygiene fix, so it was left alone rather
+  than forced — see the comment directly above `award()` in `js/score.js`.
+- **Testing.** Suite stays at 223 green (no new tests added — items 1-6 and 9
+  are refactors covered by the existing suite plus the instrumented
+  before/after checks described above; item 7's fix isn't unit-testable
+  without a canvas/DOM shim this zero-dependency project doesn't have, so it
+  was verified live in-browser instead, matching how the rest of the
+  presentation layer — `main.js`, `sprites.js`'s `rasterize` — is already
+  excluded from `node --test` coverage for the same reason).
 
 ## Ideas that came up but were never scoped
 
