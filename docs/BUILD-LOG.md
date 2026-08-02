@@ -63,11 +63,23 @@ The fix wave (`ef1f38e`, `4bd6f68`) redesigned the fight: deterministic sweep (`
 ## Open threads / known issues (adjudicated non-blocking)
 
 1. **Music has never been heard by human ears** — verified structurally (frequencies, scheduling, envelopes) only. Wants a listen; the walking bassline should "strut" (112 BPM A-minor walk, staccato ~55% gate).
-2. **Stage-0 boss dies fast** (~11–17s) vs the 30–60s intent; comments in `js/boss.js` (~line 132) still falsely cite a "30-60s guardrail". Later bosses hit the target. Either accept + fix comments, or bump stage-0 hp.
-3. **Boss bomb carpet falls entirely off-screen** (drops at screen x 396–720; craters appear with ~0.39s reaction at top speed). Consciously accepted — telegraph still announces it — but a "bombs visible while falling" pass would help readability.
+2. ~~Stage-0 boss dies fast / false "30-60s guardrail" comment~~ — **fixed in the boss-polish pass** (see below).
+3. ~~Boss bomb carpet falls entirely off-screen~~ — **fixed in the boss-polish pass** (see below).
 4. **Cosmetics:** boss clips ~4px off-canvas at band-0 sweep extreme; particles/shake animate during pause; boss freezes mid-air during death then snaps on resume; `hud.js` `hudTime += DT` per draw couples blink rate to refresh rate; per-frame `loadScores()` JSON.parse.
 5. **Code-quality deferred:** score literals in `weapons.js`/`enemies.js` not sourced from `SCORES`; `TANK_W` duplicated in `state.js`; `scoreEvents` grows unbounded within a run; unused `astronaut` sprite; dead `minOffset` conditional in `terrain.js`.
 6. **Never verified on a real touch device** — touch logic is code-reviewed + viewport-tested only.
+
+## Boss-polish pass (2026-08-02, post-v1)
+
+A follow-up pass on the stage-break fight closing open issues 2 and 3 above. Everything below was **measured by instrumenting real fights through `updateGame`**, never derived from the constants — the whole point of the pre-v1 disaster was that reading the offsets could not have found the bug.
+
+- **Bomb carpet is now visible.** Boss bombs are *launched* downward (`BOMB_DROP_VY = 120` on top of `enemies.js`'s `BOMB_GRAVITY`), cutting the 130px fall from ~1.23s to ~0.72s. Half the fall time buys the same crater-clearance for 100px less lead, so `BOMB_OFFSETS` came back from `[340…610]` to `[260…530]`. At band 2 the leading bomb is now released at screen x 370 (was 450) and is on screen for **100% of its fall** (was 73%); reaction on the first crater went **0.39s → 0.50s**. `render.js`'s new `drawBombMarkers` paints a red ground bracket on every airborne bomb's 28px crater footprint.
+- **Crater layout is byte-identical.** Only the *lead* changed, not the spacing, so world-space free gaps are unchanged at every band: 49/50/120/50 (band 0), 69/71/141/71 (band 1), 89/92/162/92 (band 2). The `>=92px` safe lane survives.
+- **The far pair of a 5-bomb carpet still lands off the right edge at band 2, and always will.** Carpet offset span (270px) + buggy body (32) + buggy screen x at top speed (110) = 412px against a 384px viewport. No fall time or lead can fit it without narrowing the lane or breaking the 0.39s reaction floor. Those craters land 337/387px ahead and scroll into frame ~1.3s before the buggy reaches them.
+- **Incidental endless-mode fix.** At the `speedBonus` cap (260px/s) the old 1.23s fall ate 321 of the 340px lead and put the first crater 19px ahead — *inside* the buggy's 0..32 body box. The same bug the pre-v1 fix wave killed in classic was still live in endless. Now +73px. Guarded by a test.
+- **Pacing retune.** The whole hp curve shifted **+6hp** — shape untouched (`BASE_HP + stage*HP_PER_STAGE`, 18/24/30/36, `FINAL_HP` 46). Damage throughput is a property of the sweep geometry (~0.75–0.81 hp/s), not of hp, so hp is the only honest dial. Measured band-1 kill times: **22.6 / 30.9 / 38.9 / 48.3 / 63.4s** (was 11.2 / 18.4 / 28.9 / 38.5 / 48.3s). The finale's 63.4s sits at the top of the 45–70s window — a candidate to trim to `FINAL_HP` 44 (~57s) if it plays long.
+- **Testing.** 194 → 201 tests. The toothless `seconds < 60` pacing assertion is replaced by PACING tests asserting ±25% windows around the measured numbers plus a monotonic-escalation check; four new BOMB CARPET tests trace real fights at all three bands (no crater in the body span, endless speed cap, gap floors, and per-band visibility/reaction floors). All new tests mutation-verified against reverting each constant.
+- **Harness caveat for future sessions:** `playerBot` cannot solve one terrain cluster at worldX≈20696 (stage 2, ~28s into the fight) and death-loops there, which is why the PACING tests wrap it in `shieldEveryFrame`. That is a bot limitation, not a level bug — the cluster has a legal jump line.
 
 ## Ideas that came up but were never scoped
 

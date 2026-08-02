@@ -132,7 +132,7 @@ test('endless boss difficulty scales off elapsed time (stage = min(4, floor(elap
   step(g);
   assert.equal(g.phase, 'boss');
   assert.equal(g.stage, 2, 'floor(180/90) = 2');
-  assert.equal(g.boss.maxHp, 12 + 2 * 6);
+  assert.equal(g.boss.maxHp, 18 + 2 * 6);
 });
 
 // Regression (review fix round 1): finishStageClear's non-course-end branch

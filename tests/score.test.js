@@ -162,7 +162,7 @@ test('crossing a STAGE_BREAKS checkpoint triggers a boss fight, then stageClear,
   assert.equal(g.phase, 'boss');
   assert.equal(g.checkpoint, breakIdx);
   assert.ok(g.boss);
-  assert.equal(g.boss.maxHp, 12, 'stage-0 boss (break E) has 12hp');
+  assert.equal(g.boss.maxHp, 18, 'stage-0 boss (break E) has 18hp');
 
   g.boss.hp = 1;
   g.playerShots = [{ x: g.boss.x + 10, y: g.boss.y + 5, vx: 300, vy: 0, dir: 'fwd' }];
@@ -212,7 +212,7 @@ test('crossing Z promotes to the champion course and clears stale entities', () 
   stepUntilPhaseChanges(g); // playing -> boss
   assert.equal(g.phase, 'boss');
   assert.ok(g.boss);
-  assert.equal(g.boss.maxHp, 40, 'the Z break is the final two-phase boss');
+  assert.equal(g.boss.maxHp, 46, 'the Z break is the final two-phase boss');
   assert.equal(g.boss.isFinal, true);
 
   g.boss.hp = 1;

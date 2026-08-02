@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { startBoss, updateBoss, hitBoss, bossBox } from '../js/boss.js';
-import { createGame, updateGame, DT } from '../js/state.js';
+import { startBoss, updateBoss, hitBoss, bossBox, BOMB_OFFSETS } from '../js/boss.js';
+import { createGame, updateGame, DT, buggyScreenX, VIEW_W, GROUND_Y } from '../js/state.js';
+import { BUGGY_W } from '../js/buggy.js';
 import { spawnCapsule } from '../js/powerups.js';
 import { clearZone, featuresInRange, STAGE_BREAKS, checkpointX } from '../js/terrain.js';
 
@@ -22,24 +23,24 @@ const step = (game, input = noInput, frames = 1) => {
 
 // --- startBoss: hp scaling ----------------------------------------------------
 
-test('startBoss scales maxHp with stage, and the Z final boss is a fixed 40hp two-phase fight', () => {
+test('startBoss scales maxHp with stage, and the Z final boss is a fixed 46hp two-phase fight', () => {
   const g0 = createGame('classic', 1);
   g0.stage = 0;
   startBoss(g0);
-  assert.equal(g0.boss.maxHp, 12);
-  assert.equal(g0.boss.hp, 12);
+  assert.equal(g0.boss.maxHp, 18);
+  assert.equal(g0.boss.hp, 18);
   assert.equal(g0.boss.isFinal, false);
 
   const g3 = createGame('classic', 1);
   g3.stage = 3;
   startBoss(g3);
-  assert.equal(g3.boss.maxHp, 30);
+  assert.equal(g3.boss.maxHp, 36);
 
   const gFinal = createGame('classic', 1);
   gFinal.stage = 4;
   startBoss(gFinal);
-  assert.equal(gFinal.boss.maxHp, 40);
-  assert.equal(gFinal.boss.hp, 40);
+  assert.equal(gFinal.boss.maxHp, 46);
+  assert.equal(gFinal.boss.hp, 46);
   assert.equal(gFinal.boss.isFinal, true);
   assert.equal(gFinal.boss.phase2, false);
 });
@@ -165,7 +166,7 @@ test('hitBoss decrements hp and awards 200 bossHit', () => {
   const scoreBefore = g.score;
 
   hitBoss(g, 1);
-  assert.equal(g.boss.hp, 11);
+  assert.equal(g.boss.hp, 17);
   assert.equal(g.score - scoreBefore, 200);
   assert.equal(g.scoreEvents.at(-1).tag, 'bossHit');
 });
@@ -177,7 +178,7 @@ test('killing the boss emits bossDown, pays bossKill, drops a capsule, and nulls
   g.capsules = [];
   const scoreBefore = g.score;
 
-  for (let i = 0; i < 12; i++) hitBoss(g, 1);
+  for (let i = 0; i < 18; i++) hitBoss(g, 1);
 
   assert.equal(g.boss, null);
   assert.ok(g.events.includes('bossDown'));
@@ -190,18 +191,18 @@ test('bossKill bonus scales with stage (2000 + stage*1000)', () => {
   const g = createGame('classic', 1);
   g.stage = 2;
   startBoss(g);
-  for (let i = 0; i < 24; i++) hitBoss(g, 1);
+  for (let i = 0; i < 30; i++) hitBoss(g, 1);
   const killEv = g.scoreEvents.find((ev) => ev.tag === 'bossKill');
   assert.equal(killEv.base, 4000);
 });
 
-test('final boss enters phase2 at hp<=20 (half of 40)', () => {
+test('final boss enters phase2 at hp<=20', () => {
   const g = createGame('classic', 1);
   g.stage = 4;
   startBoss(g);
   assert.equal(g.boss.phase2, false);
 
-  for (let i = 0; i < 19; i++) hitBoss(g, 1); // hp 40 -> 21
+  for (let i = 0; i < 25; i++) hitBoss(g, 1); // hp 46 -> 21
   assert.equal(g.boss.hp, 21);
   assert.equal(g.boss.phase2, false);
 
@@ -215,7 +216,7 @@ test('a non-final boss never sets phase2', () => {
   g.stage = 3;
   startBoss(g);
   for (let i = 0; i < 15; i++) hitBoss(g, 1);
-  assert.equal(g.boss.hp, 15);
+  assert.equal(g.boss.hp, 21);
   assert.equal(g.boss.phase2, false);
 });
 
@@ -230,14 +231,14 @@ test('player shots (fwd and up) hit the boss via updateBoss', () => {
     { x: g.boss.x, y: g.boss.y, vx: 300, vy: 0, dir: 'fwd' },
   ];
   updateBoss(g, DT);
-  assert.equal(g.boss.hp, 11, 'fwd shot overlapping the boss hitbox scores a hit');
+  assert.equal(g.boss.hp, 17, 'fwd shot overlapping the boss hitbox scores a hit');
   assert.equal(g.playerShots.length, 0, 'the consumed shot is removed');
 
   g.playerShots = [
     { x: g.boss.x, y: g.boss.y, vx: 0, vy: -260, dir: 'up' },
   ];
   updateBoss(g, DT);
-  assert.equal(g.boss.hp, 10, 'up shot overlapping the boss hitbox also scores a hit');
+  assert.equal(g.boss.hp, 16, 'up shot overlapping the boss hitbox also scores a hit');
 });
 
 // --- clearZone -----------------------------------------------------------------
@@ -267,7 +268,7 @@ test('crossing break E diverts playing -> boss, and killing the boss returns to 
   step(g); // crosses the checkpoint this frame
   assert.equal(g.phase, 'boss');
   assert.ok(g.boss);
-  assert.equal(g.boss.maxHp, 12);
+  assert.equal(g.boss.maxHp, 18);
 
   // Line up a one-shot kill: the boss-vs-playerShot collision must happen
   // *inside* the same updateGame() call state.js uses to detect the
@@ -485,8 +486,9 @@ function enterFightAt(stage, seed = 7) {
  * controls, returning when the boss dies. Every shot in the fight is fired by
  * the bot pressing 'fire' through updateGame — nothing is hand-placed.
  */
-function fightWithBot(g, seconds = 60, fireEvery = 15) {
-  const input = playerBot(g, fireEvery);
+function fightWithBot(g, seconds = 60, fireEvery = 15, wrap = null) {
+  const base = playerBot(g, fireEvery);
+  const input = wrap ? wrap(base) : base;
   assert.equal(g.phase, 'boss', 'the run is in the fight');
   const startHp = g.boss.hp;
   let hits = 0;
@@ -506,15 +508,43 @@ function fightWithBot(g, seconds = 60, fireEvery = 15) {
   return { hits, startHp, seconds: frames * DT, killed: !g.boss };
 }
 
+/**
+ * An input wrapper that hands the buggy a fresh shield every frame. killBuggy
+ * spends the shield and returns false, so the buggy is effectively immortal
+ * while everything else about the sim — speed, terrain, the boss's patterns,
+ * the bomb carpet — runs untouched.
+ */
+function shieldEveryFrame(g) {
+  return (inner) => ({
+    tick(...a) { g.powerup = { type: 'shield', remaining: Infinity }; inner.tick(...a); },
+    state: inner.state,
+    pressed: (n) => inner.pressed(n),
+    endFrame() { inner.endFrame(); },
+  });
+}
+
+/** An input wrapper that pins the buggy to a chosen speed band. */
+function holdBand(g, band) {
+  return (inner) => ({
+    tick(...a) { inner.tick(...a); },
+    state: inner.state,
+    pressed(n) {
+      if (n === 'accel') return g.buggy.band < band;
+      if (n === 'brake') return g.buggy.band > band;
+      return inner.pressed(n);
+    },
+    endFrame() { inner.endFrame(); },
+  });
+}
+
 test('REACHABILITY: a stage-0 boss can be shot down by a player firing through the real input path', () => {
   const g = enterFightAt(0);
-  assert.equal(g.boss.maxHp, 12);
-  const r = fightWithBot(g, 60);
+  assert.equal(g.boss.maxHp, 18);
+  const r = fightWithBot(g, 90);
 
   assert.ok(r.hits > 1, `the boss takes repeated hits (got ${r.hits})`);
-  assert.equal(r.hits, 12, 'every point of the 12hp bar was taken off by a fired shot');
-  assert.ok(r.killed, `the boss reaches 0hp within 60s (took ${r.seconds.toFixed(1)}s)`);
-  assert.ok(r.seconds < 60, 'and well inside the review\'s 30-60s balance guardrail');
+  assert.equal(r.hits, 18, 'every point of the 18hp bar was taken off by a fired shot');
+  assert.ok(r.killed, `the boss reaches 0hp (took ${r.seconds.toFixed(1)}s)`);
   assert.equal(g.boss, null);
   // The fight resolves into the normal stage-clear flow, not a soft-lock.
   assert.ok(g.phase === 'stageClear' || g.phase === 'dying',
@@ -523,7 +553,7 @@ test('REACHABILITY: a stage-0 boss can be shot down by a player firing through t
 
 test('REACHABILITY: the final boss stays killable in phase 2 (faster patterns, dives unlocked)', () => {
   const g = enterFightAt(4);
-  assert.equal(g.boss.maxHp, 40);
+  assert.equal(g.boss.maxHp, 46);
   assert.equal(g.boss.isFinal, true);
   // Start the clock at the phase-2 threshold so this measures the phase-2
   // fight specifically: 0.7x hover/telegraph timings and diveSweep in the
@@ -536,6 +566,61 @@ test('REACHABILITY: the final boss stays killable in phase 2 (faster patterns, d
   assert.equal(r.hits, 20);
   assert.ok(r.killed, `phase 2 reaches 0hp within 60s (took ${r.seconds.toFixed(1)}s)`);
   assert.equal(g.boss, null);
+});
+
+// --- PACING ------------------------------------------------------------------
+//
+// The assertion these replace was `seconds < 60` on a fight that took 11s, on
+// a comment claiming a "30-60s guardrail" the fight had never been inside. A
+// bound that loose cannot fail, so it was proving nothing; the windows below
+// are +/-25% around numbers actually measured through updateGame with this
+// same bot, tight enough that a retune of hp, fire cadence or sweep geometry
+// has to come back here and re-measure.
+//
+// Deliberately measured at the DEFAULT cruise band (1) with the standard bot,
+// which is what the numbers in js/boss.js's PACING block quote. Band 0 and
+// band 2 vary by roughly +/-20% and are not asserted: the bot's fixed 1.0s
+// jump arc makes it a much weaker driver at band 0 than a human, so a tight
+// band-0 bound would be measuring the bot, not the fight.
+const pacingWindow = (stage, expected, opts = {}) => {
+  const g = enterFightAt(stage, 7);
+  if (opts.phase2) { g.boss.hp = 20; g.boss.phase2 = true; }
+  // A competent player is one who does not die to the arena while shooting.
+  // A fresh shield each frame makes killBuggy a no-op, so this measures the
+  // length of the FIGHT rather than the bot's (poor) crater driving; without
+  // it a single unlucky terrain cluster can add a minute of respawn loops.
+  const shielded = shieldEveryFrame(g);
+  const r = fightWithBot(g, 180, 15, shielded);
+  assert.ok(r.killed, `stage ${stage} boss dies (took ${r.seconds.toFixed(1)}s)`);
+  assert.ok(r.seconds > expected * 0.75 && r.seconds < expected * 1.25,
+    `stage ${stage} boss should take ~${expected}s +/-25%, measured ${r.seconds.toFixed(1)}s `
+    + `(${r.startHp}hp at ${(r.hits / r.seconds).toFixed(2)} hp/s)`);
+  return r;
+};
+
+test('PACING: the stage-0 boss is a ~23s fight, not the ~11s one the old 12hp curve gave', () => {
+  const r = pacingWindow(0, 22.6);
+  // The explicit floor the retune existed to establish: the first boss the
+  // player ever meets must not be over before the escalation curve starts.
+  assert.ok(r.seconds >= 20, `stage-0 must clear 20s, got ${r.seconds.toFixed(1)}s`);
+  assert.ok(r.seconds <= 30, `and stay under 30s, got ${r.seconds.toFixed(1)}s`);
+});
+
+test('PACING: the hp curve escalates monotonically across E/J/O/T and steps up at Z', () => {
+  const times = [
+    pacingWindow(0, 22.6).seconds,
+    pacingWindow(1, 30.9).seconds,
+    pacingWindow(2, 38.9).seconds,
+    pacingWindow(3, 48.3).seconds,
+    pacingWindow(4, 63.4).seconds,
+  ];
+  for (let i = 1; i < times.length; i++) {
+    assert.ok(times[i] > times[i - 1] + 3,
+      `each boss is a clearly longer fight than the last: ${times.map((t) => t.toFixed(1)).join(' -> ')}`);
+  }
+  // The finale is the one fight with a hard upper bound in the design brief.
+  assert.ok(times[4] >= 45 && times[4] <= 70,
+    `the Z boss must land in 45-70s, measured ${times[4].toFixed(1)}s`);
 });
 
 test('REACHABILITY: fireDual actually fires during a boss fight (it silently no-opped before)', () => {
@@ -707,4 +792,196 @@ test('capsules move and can be collected during a boss fight', () => {
   let n = 0;
   while (g.powerup == null && n < 600) { step(g); n++; }
   assert.equal(g.powerup?.type, 'rapid', 'and the buggy can drive into one mid-fight');
+});
+
+// --- BOMB CARPET: readability + the crater-under-the-buggy regression --------
+//
+// The pre-fix bug this guards against was a bomb landing at worldX+13..+41,
+// i.e. inside the buggy's own 0..32 body box, at band 2 — an unavoidable death
+// with no reaction window at all. It was found by INSTRUMENTING A REAL FIGHT,
+// not by reasoning about the offsets, and that is how it is guarded: the
+// helper below drives a real fight through updateGame and records where every
+// bomb was released, how much of its fall happened inside the 384px viewport,
+// and where its crater actually opened relative to the buggy at that instant.
+//
+// Reading the offsets alone would not catch it. The landing position is
+// BOMB_OFFSETS[i] minus however far the buggy travels during the fall, and
+// the fall time is set by enemies.js's gravity plus boss.js's launch velocity
+// while the travel is set by buggy.js's speed bands — four constants in three
+// modules that no single file can check.
+
+/** Traces every boss bomb of a real fight at a pinned speed band. */
+function traceCarpet(stage, band, seconds = 45) {
+  const g = enterFightAt(stage, 7);
+  g.lives = 999;
+  const base = playerBot(g, 15);
+  const input = holdBand(g, band)(shieldEveryFrame(g)(base));
+  const live = new Map();
+  const bombs = [];
+  let frames = 0;
+  const maxFrames = Math.round(seconds / DT);
+  const screenXof = (wx) => wx - g.buggy.worldX + buggyScreenX(g);
+
+  while (g.boss && frames < maxFrames) {
+    input.tick(g);
+    updateGame(g, input, DT);
+    frames++;
+    for (const shot of g.enemyShots) {
+      if (shot.kind !== 'bomb') continue;
+      if (!live.has(shot.id)) {
+        live.set(shot.id, {
+          id: shot.id, worldX: shot.x, dropScreenX: screenXof(shot.x),
+          dropOffset: shot.x - g.buggy.worldX, visFrames: 0, frames: 0,
+        });
+      }
+      const rec = live.get(shot.id);
+      rec.frames++;
+      const sx = screenXof(shot.x);
+      if (sx > -8 && sx < VIEW_W) rec.visFrames++;
+    }
+    for (const [id, rec] of live) {
+      if (rec.done || g.enemyShots.some((shot) => shot.id === id)) continue;
+      rec.done = true;
+      rec.fallTime = rec.frames * DT;
+      rec.visibleTime = rec.visFrames * DT;
+      rec.visibleFrac = rec.visibleTime / rec.fallTime;
+      // Crater geometry at the instant the crater opened.
+      rec.landOffset = rec.worldX - g.buggy.worldX;      // crater left vs buggy left
+      rec.reactSec = (rec.landOffset - BUGGY_W / 2) / g.speed; // craters test the MIDPOINT
+      bombs.push(rec);
+    }
+  }
+  const craters = g.terrain.features.filter((f) => f.type === 'bombCrater').sort((a, b) => a.x - b.x);
+  const gaps = [];
+  for (let i = 1; i < craters.length; i++) {
+    const gap = craters[i].x - (craters[i - 1].x + craters[i - 1].w);
+    if (gap < 400) gaps.push(gap); // anything wider is the road between two carpets
+  }
+  return { bombs, gaps, speed: g.speed };
+}
+
+test('BOMB CARPET: no crater ever opens on or behind the buggy body, at any speed band', () => {
+  for (const band of [0, 1, 2]) {
+    const { bombs } = traceCarpet(2, band);
+    assert.ok(bombs.length >= 10, `band ${band} traced a real carpet (got ${bombs.length} bombs)`);
+    for (const b of bombs) {
+      // The crater spans [landOffset, landOffset+28); the body spans [0, 32).
+      assert.ok(b.landOffset >= BUGGY_W,
+        `band ${band}: bomb ${b.id} released at +${b.dropOffset.toFixed(0)} cratered at `
+        + `+${b.landOffset.toFixed(1)}px, inside/behind the buggy's 0..${BUGGY_W} body box`);
+    }
+  }
+});
+
+test('BOMB CARPET: the endless speed ramp cannot pull a crater under the buggy either', () => {
+  // Classic tops out at 200px/s, but endless adds game.speedBonus (+60 max),
+  // and the lead is a fixed offset table — so the fastest the game ever gets
+  // is where the clearance is thinnest. Before boss bombs were launched
+  // instead of dropped, a 1.23s fall at 260px/s ate 321 of the 340px lead and
+  // put the first crater 19px ahead of the buggy: INSIDE the body box.
+  const g = enterFightAt(2, 7);
+  g.lives = 999;
+  g.mode = 'endless';
+  g.elapsedTotal = 600;  // past the +60 cap
+  const base = playerBot(g, 15);
+  const input = holdBand(g, 2)(shieldEveryFrame(g)(base));
+  let frames = 0, seen = 0, worst = Infinity;
+  const live = new Map();
+  while (g.boss && frames < 45 / DT) {
+    input.tick(g);
+    updateGame(g, input, DT);
+    frames++;
+    for (const shot of g.enemyShots) if (shot.kind === 'bomb') live.set(shot.id, shot.x);
+    for (const [id, worldX] of live) {
+      if (g.enemyShots.some((shot) => shot.id === id)) continue;
+      live.delete(id);
+      seen++;
+      worst = Math.min(worst, worldX - g.buggy.worldX);
+    }
+  }
+  assert.ok(g.speed >= 255, `the endless ramp really is at full tilt (${g.speed.toFixed(0)}px/s)`);
+  assert.ok(seen >= 5, `bombs actually fell (${seen})`);
+  assert.ok(worst >= BUGGY_W,
+    `closest crater at the endless speed cap was +${worst.toFixed(1)}px, inside the 0..${BUGGY_W} body box`);
+});
+
+test('BOMB CARPET: the safe lane and every other gap stay driveable at every band', () => {
+  // buggy.js tests crater-family features against the buggy MIDPOINT only, so
+  // the gap the player has to hit is a point, not the 32px body — which is why
+  // the 49px band-0 gaps are driveable at all. These are the widths the fight
+  // shipped with; the readability pass must not have narrowed any of them.
+  const floors = { 0: 49, 1: 69, 2: 89 };
+  for (const band of [0, 1, 2]) {
+    const { gaps } = traceCarpet(2, band);
+    assert.ok(gaps.length >= 4, `band ${band} produced measurable gaps (${gaps.length})`);
+    const min = Math.min(...gaps);
+    assert.ok(min >= floors[band] - 0.5, // sub-pixel: dt-integrated positions
+      `band ${band} min free gap is ${min.toFixed(1)}px, was ${floors[band]}px before the pass`);
+    // And a genuinely wide safe lane survives somewhere in every carpet.
+    assert.ok(Math.max(...gaps) >= 92,
+      `band ${band} still has a >=92px safe lane (widest ${Math.max(...gaps).toFixed(0)}px)`);
+  }
+});
+
+test('BOMB CARPET: the player can SEE the leading bombs fall, and gets >=0.39s on the first crater', () => {
+  // The failure this pins down: after the +300 lead shift the whole carpet was
+  // released at screen x 396..720 on a 384px viewport, so the near bombs only
+  // scrolled into frame a third of the way down and the attack was announced
+  // (bossTelegraph) without ever being located.
+  const expectations = {
+    // band: [max screen-x the FIRST bomb may be released at, min reaction on
+    //        the first crater, min bombs per carpet visible for most of the fall]
+    0: [384, 1.5, 2],
+    1: [384, 0.85, 2],
+    2: [384, 0.39, 1],
+  };
+  for (const band of [0, 1, 2]) {
+    const [maxDropX, minReact, minWellSeen] = expectations[band];
+    const { bombs } = traceCarpet(2, band);
+    // Bombs come in repeating 5-bomb carpets; index 0 of each is the near one.
+    const lead = bombs.filter((b) => Math.round(b.dropOffset) === BOMB_OFFSETS[0]);
+    assert.ok(lead.length >= 2, `band ${band} traced multiple carpets (${lead.length})`);
+    for (const b of lead) {
+      assert.ok(b.dropScreenX <= maxDropX,
+        `band ${band}: the leading bomb is released at screen x ${b.dropScreenX.toFixed(0)}, `
+        + `off the ${VIEW_W}px viewport — the carpet is announced but not located`);
+      assert.ok(b.visibleFrac > 0.9,
+        `band ${band}: the leading bomb is on screen for ${(b.visibleFrac * 100).toFixed(0)}% of its fall`);
+      assert.ok(b.reactSec >= minReact,
+        `band ${band}: only ${b.reactSec.toFixed(3)}s of road between the buggy midpoint and the `
+        + `first crater (floor ${minReact}s)`);
+    }
+    // Per 5-bomb carpet, how many bombs spend most of their fall on screen.
+    const wellSeen = bombs.filter((b) => b.visibleFrac >= 0.7).length / (bombs.length / 5);
+    assert.ok(wellSeen >= minWellSeen,
+      `band ${band}: only ${wellSeen.toFixed(1)} of 5 bombs per carpet are visible for >=70% of the fall`);
+  }
+});
+
+test('BOMB CARPET: boss bombs are launched downward; a bomber UFO still just drops them', () => {
+  // The readability lever. Halving the fall is what let the lead shrink by
+  // 80px without moving the craters onto the buggy — and it must not leak into
+  // the regular bomber wave enemy, whose slow drop is its own telegraph.
+  const g = createGame('classic', 1);
+  g.stage = 0;
+  g.terrain = { mode: 'test', features: [] };
+  startBoss(g);
+  g.boss.pattern = 'bombCarpet';
+  g.boss.patternT = 0;
+  g.enemyShots = [];
+  updateBoss(g, DT);
+  const bomb = g.enemyShots.find((s) => s.kind === 'bomb');
+  assert.ok(bomb, 'the carpet fired');
+  assert.ok(bomb.vy > 0, `a boss bomb leaves with downward speed (got vy ${bomb.vy})`);
+
+  // And the resulting fall really is the ~0.72s the offsets are sized for.
+  // Driven through updateGame in the real 'boss' phase, so the number comes
+  // from enemies.js's actual integration rather than a formula rewritten here.
+  g.phase = 'boss';
+  let t = 0;
+  while (g.enemyShots.includes(bomb) && t < 5) { updateGame(g, noInput, DT); t += DT; }
+  assert.ok(bomb.y >= GROUND_Y, 'the bomb reached the ground rather than being culled');
+  assert.ok(t > 0.6 && t < 0.85,
+    `a boss bomb falls from hover altitude in ~0.72s (measured ${t.toFixed(2)}s); `
+    + 'BOMB_OFFSETS is sized against that number');
 });
