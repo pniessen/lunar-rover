@@ -496,6 +496,21 @@ reviewer had read this pass's own in-progress edits. **Check `git show
 <commit>:<file>` before concluding that documentation contradicts the code** —
 acting on that report would have deleted the feature.
 
+**The orchestrator-side root cause, and the rule that prevents it.** That
+reviewer was contaminated because a reviewer and an implementer were dispatched
+*in parallel against the same files*. Reviews are read-only, so this looks safe;
+it is not, because the reviewer's evidence is the filesystem. Two earlier
+reviewers in this project flagged the same hazard when they noticed a tree
+mutating under them — it was tolerated twice before it finally produced a false
+finding that a subagent was told to act on. The subagent was right to refuse and
+verify against commits first; that pushback is what saved the work.
+**Rules going forward:** (1) never run an implementer and a reviewer
+concurrently over overlapping files — sequence them; (2) reviewers must inspect
+a pinned `git worktree` or use `git show <sha>:<path>`, never `grep` the live
+working directory as evidence about a commit; (3) an instruction derived from a
+review finding is not authority — verify the finding against committed state
+before destroying anything, and push back if it does not hold.
+
 ## Ideas that came up but were never scoped
 
 Gamepad support (spec listed it as optional), per-type capsule art, pickup forgiveness margin (~±4px like shot hitboxes), a visible "bombs incoming" indicator, endless-mode chime past 3000m.
