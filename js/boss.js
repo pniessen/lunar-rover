@@ -554,6 +554,38 @@ export function hitBoss(game, damage = 1) {
  * the boss hitbox. No-ops if game.boss is already null (e.g. the boss died
  * to its own last-hit collision earlier in this same call).
  */
+/**
+ * updateBossMotion(game, dt) — ticks ONLY the boss's horizontal sweep
+ * (b.sweepT, b.x) during a mid-fight buggy death ('dying'/'respawning' —
+ * state.js calls this from both). Deliberately does nothing else: no
+ * advancePattern (no telegraph countdown, no bombs/aimed shots/dive), no
+ * collidePlayerShotsVsBoss (no damage). The boss must not attack or take
+ * damage while the player is dead or blinking in — only its position has to
+ * stay honest.
+ *
+ * Without this, updateBoss was simply never called during those phases, so
+ * b.x (pinned to `buggy.worldX + sweepOffsetAt(b.sweepT)` — see the FIGHT
+ * GEOMETRY note above) held perfectly still for the whole ~1.9s dying+
+ * respawning window, frozen against the buggy's PRE-death worldX — while the
+ * buggy itself teleported backward to the respawn point (see state.js's
+ * respawn()) and drove forward again. The instant 'boss' resumed and
+ * updateBoss ran again, it recomputed b.x against the buggy's NEW worldX and
+ * the mothership visibly snapped from its stale, far-away frozen spot to
+ * right on top of the respawn point in a single frame.
+ *
+ * Ticking the same sweep formula here every frame instead means b.x tracks
+ * the buggy's actual worldX continuously — frozen while the buggy is (during
+ * 'dying', updateBuggy itself doesn't run), then moving again once it does
+ * (during 'respawning') — so there is nothing left to snap when 'boss'
+ * resumes: the sweep is already exactly where updateBoss would put it.
+ */
+export function updateBossMotion(game, dt) {
+  const b = game.boss;
+  if (!b) return;
+  if (b.pattern !== 'diveSweep') b.sweepT += dt;
+  b.x = game.buggy.worldX + sweepOffsetAt(b.sweepT);
+}
+
 export function updateBoss(game, dt) {
   const b = game.boss;
   if (!b) return;

@@ -66,7 +66,7 @@ The fix wave (`ef1f38e`, `4bd6f68`) redesigned the fight: deterministic sweep (`
 1. **Music has never been heard by human ears** — verified structurally (frequencies, scheduling, envelopes) only. Wants a listen; the walking bassline should "strut" (112 BPM A-minor walk, staccato ~55% gate).
 2. ~~Stage-0 boss dies fast / false "30-60s guardrail" comment~~ — **fixed in the boss-polish pass** (see below).
 3. ~~Boss bomb carpet falls entirely off-screen~~ — **fixed in the boss-polish pass** (see below).
-4. **Cosmetics:** boss clips ~4px off-canvas at band-0 sweep extreme; particles/shake animate during pause; boss freezes mid-air during death then snaps on resume; `hud.js` `hudTime += DT` per draw couples blink rate to refresh rate; per-frame `loadScores()` JSON.parse.
+4. ~~Cosmetics: boss clips ~4px off-canvas at band-0 sweep extreme; particles/shake animate during pause; boss freezes mid-air during death then snaps on resume; `hud.js` `hudTime += DT` per draw couples blink rate to refresh rate~~ — **fixed in the cosmetic-polish pass** (see below). Remaining cosmetic item: per-frame `loadScores()` JSON.parse.
 5. **Code-quality deferred:** score literals in `weapons.js`/`enemies.js` not sourced from `SCORES`; `TANK_W` duplicated in `state.js`; `scoreEvents` grows unbounded within a run; unused `astronaut` sprite; dead `minOffset` conditional in `terrain.js`.
 6. **Never verified on a real touch device** — touch logic is code-reviewed + viewport-tested only.
 
@@ -95,6 +95,79 @@ The problem the polish pass above created and did not notice: `enterBoss` carved
 - **`FINAL_PHASE2_HP` is now derived,** `Math.floor(FINAL_HP / 2)` == 23. It had been left at the literal 20 when `FINAL_HP` went 40→46, quietly moving the finale's phase-2 line from 50% of the bar to 43%. Measured (median of seven cadences): phase 1 35.5s + phase 2 28.9s = 64.5s before, **30.3s + 34.3s = 64.5s** after. The total is unchanged — throughput is a property of the sweep geometry, not of where the phase line sits — so restoring the split costs nothing.
 - **Respawn safety re-measured, not assumed.** A rolling clear anchored on the buggy has to survive the buggy moving *backwards*: respawn drops it at the last checkpoint line (classic) or 1200px boundary (endless), behind everything the sweep has done. It holds because features are removed outright and never regenerate — a consequence of two designs meeting, not something either states. Across 63 forced mid-fight respawns (both modes, all three bands): **0** landed on a hazard, and the closest hazard ever ahead of a respawn point was +98px.
 - **Testing.** 201 → 209 tests. Six new ROLLING ARENA tests (natural terrain never seen/hit at every band; bomb craters survive and are still what kills you; endless chunks swept as they generate; a full-length finale keeps clear road; the sweep *stops* with the boss so the level comes back; respawn safety), plus a finale phase-split PACING test. Mutation-verified against: removing the per-frame sweep, making the clear type-blind, removing the `game.boss` gate, and reverting `FINAL_PHASE2_HP` to 20.
+
+## Cosmetic-polish pass (2026-08-02, post-v1)
+
+A presentation-only sweep closing open issue 4 above. No gameplay constants
+(hp/BOMB_OFFSETS/sweep geometry) or arena-clearing logic changed — every fix
+either draws differently or ticks presentation-only state, and the
+pure/presentation split (state.js/boss.js stay Node-testable, DOM-free) held
+throughout.
+
+- **Boss no longer clips off-canvas.** At speed band 0 the sweep's left
+  extreme (offset −60) put the 48px mothership at screen x −4..44 — 4px of
+  its left edge drawn off the 384px buffer. Fixed on the drawing side only:
+  `render.js` exports a pure `clampSpriteScreenX(sx, spriteW)` that clamps
+  the boss's *screen* x into `[0, VIEW_W - spriteW]` right before `drawImage`.
+  `boss.js`'s world-space sweep (`SWEEP_CENTER`/`SWEEP_AMP`/`sweepOffsetAt`)
+  and the boss's collision box are completely untouched, so the up-gun
+  overlap window the pre-v1 fix wave depends on cannot have moved — there
+  was nothing gameplay-visible to re-prove.
+- **Particles and screen shake now freeze while paused.** `main.js`'s loop
+  was passing `steps * DT` into `render()` even while `game.paused` — `steps`
+  keeps counting fixed-timestep iterations that `updateGame` itself no-ops
+  on, so the effect layer kept aging through a pause the simulation was
+  correctly frozen for. Now `render(renderer, game, acc / DT, game.paused ? 0
+  : steps * DT)`. Two related snags found and fixed along the way: (1) even
+  at `simDt=0`, the shake block was re-rolling `shakeX`/`shakeY` from the
+  particle pool's PRNG every call regardless of decay — an in-progress shake
+  would keep twitching in a random direction for as long as the game stayed
+  paused; now gated on `simDt > 0`. (2) `render()`'s buggy-position
+  extrapolation (`step = moving ? DT * alpha : 0`) didn't check
+  `game.paused`, so `alpha`'s normal frame-to-frame jitter (harmless while
+  actually moving) very slightly panned the camera every paused frame; `moving`
+  now requires `!game.paused` too.
+- **Boss motion now ticks through a mid-fight death instead of freezing then
+  snapping.** `updateBoss` never ran during `'dying'`/`'respawning'`
+  (correctly — it must not fire/damage/advance pattern while the player is
+  dead), so `game.boss.x` (pinned to `buggy.worldX + sweepOffsetAt(sweepT)`)
+  held still against the buggy's *pre-death* worldX for the whole ~1.9s
+  window, while the buggy itself teleported to the respawn point and drove
+  forward again — then snapped to the correct position the instant `'boss'`
+  resumed. New `updateBossMotion(game, dt)` in `boss.js` ticks only
+  `sweepT`/`x` (no pattern advance, no firing, no `collidePlayerShotsVsBoss`)
+  and is called from both `state.js` phases. One subtlety: it has to run
+  *after* the `respawn()` call in the `'dying'` case, not before — `respawn()`
+  teleports `buggy.worldX` mid-frame on the exact frame the window ends, and
+  computing `b.x` against the pre-teleport value (tried first) left exactly
+  one frame where the boss was correct for a `worldX` that had already been
+  overwritten, a same-frame miniature of the bug this exists to fix. A test
+  in `tests/boss.test.js` asserts `boss.x - buggy.worldX ==
+  sweepOffsetAt(sweepT)` on every single sampled frame across a forced
+  death/respawn cycle — a stronger claim than "eventually consistent" — and
+  caught the ordering bug the first time it was written.
+- **HUD blink/combo-flash now threaded on the real sim delta, same fix as
+  particles/shake.** `hud.js` was doing `hudTime += DT` (and `comboFlash -=
+  DT`) once per `drawHUD()` call, i.e. once per *rendered* frame, coupling
+  both animations to display refresh rate rather than sim time. `drawHUD`
+  now takes a `simDt` parameter (defaults to `DT`) and `render.js` threads
+  its own `simDt` straight through, exactly mirroring `consumeFx`. Since
+  `main.js` now also zeroes `simDt` while paused (the fix above), the blink
+  freezes on the exact frame the game is paused rather than continuing to
+  animate — chosen deliberately as the more correct-feeling default, not
+  left as an oversight.
+- **Testing.** 209 → 223 tests. New `tests/render.test.js` (pure
+  `clampSpriteScreenX` cases, a full-sweep-period/all-bands on-screen
+  invariant, and `consumeFx(simDt=0)` particle/shake-freeze assertions —
+  `consumeFx` was exported specifically because it's pure computation over
+  plain objects, no canvas needed) and `tests/hud.test.js` (a same-total-
+  elapsed-time-via-different-call-counts regression test for the blink
+  coupling, using a cache-busted dynamic `import()` per test to get a fresh
+  copy of `hud.js`'s module-level timer state). `tests/boss.test.js` gained
+  four `updateBossMotion` tests (ticks the sweep; fires/damages/advances
+  nothing; freezes during a dive same as `updateBoss`; the per-frame formula
+  invariant above). All new tests mutation-verified against reverting each
+  fix.
 
 ## Ideas that came up but were never scoped
 

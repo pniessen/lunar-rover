@@ -110,6 +110,27 @@ function mod(a, n) {
   return ((a % n) + n) % n;
 }
 
+/**
+ * Clamps a sprite's SCREEN-space x so its full width always lands inside the
+ * VIEW_W buffer. Presentation-only: it never touches the sprite's underlying
+ * world-space position (e.g. game.boss.x), so it cannot change hit-testing —
+ * boss.js's collision box is computed from boss.x/sweepOffsetAt entirely
+ * independently of how/where this draws it.
+ *
+ * Exists because the boss's sweep (see boss.js's FIGHT GEOMETRY note) was
+ * never designed with the 384px viewport in mind: at speed band 0
+ * (buggyScreenX==56) the sweep's left extreme (offset -60) puts the 48px
+ * mothership at screen x -4..44 — 4px of its left edge drawn off-canvas. The
+ * sweep's offsets are load-bearing for the up-gun overlap window (the boss
+ * was once unhittable), so this fixes the symptom on the drawing side
+ * instead of touching SWEEP_CENTER/SWEEP_AMP and having to re-prove the
+ * overlap window. Pure function of (sx, spriteW) so it's Node-testable
+ * without a canvas.
+ */
+export function clampSpriteScreenX(sx, spriteW) {
+  return Math.max(0, Math.min(sx, VIEW_W - spriteW));
+}
+
 // --- CRT preference persistence ---------------------------------------------
 // Same guarded-localStorage pattern as score.js/audio.js: every access is
 // wrapped, so a browser with storage disabled (or a Node import) simply falls
@@ -432,7 +453,7 @@ function drawBoss(r, game, camX) {
   const img = sprites[boss.isFinal ? 'boss2' : 'boss1'] || sprites.boss1;
   if (!img) return;
 
-  const sx = Math.round(boss.x - camX);
+  const sx = clampSpriteScreenX(Math.round(boss.x - camX), img.width);
   const sy = Math.round(boss.y);
 
   const flashing = boss.telegraph > 0 && Math.floor(r.tick / 4) % 2 === 0;
@@ -461,8 +482,14 @@ function drawBoss(r, game, camX) {
  * Drains game.fx into particle bursts + screen shake, and emits the
  * continuous/event-driven effects that have no fx entry of their own
  * (wheel dust, muzzle flash).
+ *
+ * Exported (unlike the other layer functions, which need a real canvas ctx)
+ * because this one is pure computation over plain objects — no drawing at
+ * all — so it's Node-testable: tests/render.test.js uses it directly to
+ * verify simDt===0 (main.js's paused case) leaves the particle pool and
+ * shake offset completely unchanged.
  */
-function consumeFx(r, game, simDt) {
+export function consumeFx(r, game, simDt) {
   const p = r.particles;
 
   const fx = game.fx;
@@ -526,12 +553,23 @@ function consumeFx(r, game, simDt) {
   // Shake decays linearly and is resolved to an INTEGER offset, so the world
   // layers always land on whole buffer pixels and never blur.
   if (r.shake > 0) {
-    r.shake = Math.max(0, r.shake - SHAKE_DECAY * simDt);
-    const mag = r.shake;
-    // Reuse the particle pool's seeded PRNG rather than Math.random(), so the
-    // renderer stays free of unseeded entropy (see particles.js).
-    r.shakeX = Math.round((poolRandom(p) * 2 - 1) * mag);
-    r.shakeY = Math.round((poolRandom(p) * 2 - 1) * mag);
+    // simDt is 0 while paused (main.js zeroes it — see loop()'s render call)
+    // and can also be legitimately 0 on a rendered frame that contained no
+    // fixed sim step (a high-refresh display can outpace the 60Hz tick).
+    // Skip the decay AND the re-roll in that case: with the guard removed,
+    // r.shake wouldn't move but shakeX/shakeY would still draw a fresh
+    // random offset from poolRandom() every such frame, jittering the camera
+    // with no time actually having elapsed — most visibly, a screen shake
+    // still mid-decay when P is pressed would keep twitching for as long as
+    // the game stayed paused instead of holding the frame it was stopped on.
+    if (simDt > 0) {
+      r.shake = Math.max(0, r.shake - SHAKE_DECAY * simDt);
+      const mag = r.shake;
+      // Reuse the particle pool's seeded PRNG rather than Math.random(), so
+      // the renderer stays free of unseeded entropy (see particles.js).
+      r.shakeX = Math.round((poolRandom(p) * 2 - 1) * mag);
+      r.shakeY = Math.round((poolRandom(p) * 2 - 1) * mag);
+    }
   } else {
     r.shakeX = 0;
     r.shakeY = 0;
@@ -753,8 +791,12 @@ export function render(r, game, alpha, simDt = DT) {
 
   // Extrapolate the buggy by the leftover fraction of a step so the world
   // scrolls smoothly at display rate; the buggy itself stays pinned to
-  // buggyScreenX, so only the camera actually moves sub-pixel.
-  const moving = game.phase === 'playing' || game.phase === 'respawning';
+  // buggyScreenX, so only the camera actually moves sub-pixel. Excluded
+  // while paused: updateGame is a no-op then, so b.worldX never actually
+  // advances, but `alpha` still drifts frame to frame with real wall-clock
+  // timing — without this guard the world would visibly jitter by a couple
+  // of px on every paused frame even though nothing is simulating.
+  const moving = !game.paused && (game.phase === 'playing' || game.phase === 'respawning');
   const step = moving ? DT * alpha : 0;
   const worldX = b.worldX + game.speed * step;
   const by = b.airborne ? b.y + b.vy * step : b.y;
@@ -791,7 +833,10 @@ export function render(r, game, alpha, simDt = DT) {
 
   ctx.restore();
 
-  drawHUD(ctx, game, r.sprites);
+  // Threads the real per-frame sim delta through to the HUD's own timers
+  // (warning-light blink, combo-flash), same fix as consumeFx's particles/
+  // shake above and for the same reason — see hud.js's drawHUD docstring.
+  drawHUD(ctx, game, r.sprites, simDt);
   drawOverlays(r, game, screenX, by);
 
   presentToScreen(r);

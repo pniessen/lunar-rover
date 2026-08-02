@@ -98,8 +98,14 @@ export function textWidth(str, scale = 1) {
 // --- module-level HUD-only timers ------------------------------------------
 // Presentation-only animation state (blink phase, combo-flash), deliberately
 // NOT part of `game` (state.js is pure logic with no notion of "flash for
-// 0.3s"). Driven by an accumulating counter advanced one DT per drawHUD()
-// call — NOT Date.now() — so it stays deterministic and frame-based.
+// 0.3s"). Driven by an accumulating counter advanced by the caller's real
+// simulation delta (see drawHUD's `simDt` param) — NOT Date.now() and NOT a
+// bare per-call DT — so it stays deterministic and frame-rate independent.
+// A rendered frame can contain zero, one, or several fixed sim steps (see
+// main.js's loop()); assuming exactly one DT per drawHUD() call ran the
+// warning-light blink and combo-flash fast on any display faster than 60Hz
+// and slow on any display slower than 60Hz — the same class of bug already
+// fixed for particles/shake via render.js's simDt = steps * DT.
 
 let hudTime = 0;
 let prevComboMult = 1;
@@ -183,12 +189,21 @@ function drawPowerup(ctx, game, x, y) {
  * Draws the full HUD into the top HUD_H (36px) strip of `ctx`. Reads only
  * from `game`; never mutates it. `sprites` is the rasterized sprite set
  * from render.js's renderer (used for the mini life-buggy icons).
+ *
+ * `simDt` is the real simulation time elapsed since the previous drawHUD()
+ * call — render.js passes its own `simDt` (steps * DT) straight through, so
+ * this module's blink/flash timers age at the same real-world rate on a
+ * 30Hz, 60Hz or 144Hz display. Defaults to DT for any caller that doesn't
+ * track it. Also 0 while paused (render.js's caller zeroes it — see
+ * main.js's loop()), which freezes the blink/flash exactly on the frame the
+ * game was paused; that's the intended feel, not an oversight — see
+ * BUILD-LOG.md.
  */
-export function drawHUD(ctx, game, sprites) {
-  hudTime += DT;
+export function drawHUD(ctx, game, sprites, simDt = DT) {
+  hudTime += simDt;
   if (game.combo.mult > prevComboMult) comboFlash = COMBO_FLASH_TIME;
   prevComboMult = game.combo.mult;
-  if (comboFlash > 0) comboFlash = Math.max(0, comboFlash - DT);
+  if (comboFlash > 0) comboFlash = Math.max(0, comboFlash - simDt);
 
   ctx.fillStyle = '#0a0a12';
   ctx.fillRect(0, 0, VIEW_W, HUD_H);

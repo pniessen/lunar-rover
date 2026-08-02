@@ -117,10 +117,16 @@ function loop(t) {
     acc -= DT;
   }
   // 4th argument: the simulation time this frame actually advanced. render.js
-  // ages particles and screen shake by it instead of assuming one fixed step
-  // per rendered frame, which would otherwise make both run fast on a
-  // high-refresh display and slow on a low-refresh one.
-  render(renderer, game, acc / DT, steps * DT);
+  // ages particles, screen shake, and the HUD's blink/flash timers by it
+  // instead of assuming one fixed step per rendered frame, which would
+  // otherwise make all of them run fast on a high-refresh display and slow
+  // on a low-refresh one. Forced to 0 while paused: `steps` still counts the
+  // fixed-timestep loop's iterations above even when every one of them was a
+  // no-op (updateGame's own pause check), so passing the real steps*DT here
+  // would keep aging the effect layer through a pause the simulation itself
+  // is correctly frozen for. A 0 simDt makes updateParticles/the shake decay/
+  // the HUD blink hold exactly the frame they were on when P was pressed.
+  render(renderer, game, acc / DT, game.paused ? 0 : steps * DT);
   // Audio consumes this frame's events after render (render itself doesn't
   // read game.events) but before the single clear point below.
   //

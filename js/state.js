@@ -14,7 +14,7 @@ import {
 import { fireDual, updateWeapons } from './weapons.js';
 import { spawnDirector, updateEnemies } from './enemies.js';
 import { updatePowerups } from './powerups.js';
-import { startBoss, updateBoss } from './boss.js';
+import { startBoss, updateBoss, updateBossMotion } from './boss.js';
 import { mulberry32 } from './rng.js';
 import {
   award, featuresJumped, stageBonus, loadScores, submitScore,
@@ -789,6 +789,19 @@ export function updateGame(game, input, dt, seed) {
           setPhase(game, 'respawning');
         }
       }
+      // Cosmetic-polish pass: keeps a mid-fight boss's sweep tracking the
+      // buggy's worldX instead of holding still and snapping to the new
+      // position once 'boss' resumes — see updateBossMotion's docstring in
+      // boss.js. No-ops if game.boss is null (an ordinary, non-boss death).
+      // Deliberately placed AFTER the respawn() branch above, not before:
+      // respawn() teleports buggy.worldX on the exact frame this window
+      // ends, and computing b.x against the PRE-teleport worldX (as an
+      // earlier version of this fix did) left one single frame where b.x
+      // was correct for a buggy.worldX that had already been overwritten —
+      // a same-frame version of the exact snap this fix exists to remove.
+      // Running last means b.x is always computed against buggy.worldX as
+      // it stands at the end of the frame.
+      updateBossMotion(game, dt);
       break;
 
     case 'respawning':
@@ -805,6 +818,10 @@ export function updateGame(game, input, dt, seed) {
       // here, though — updatePowerups internally gates that to 'playing'
       // only, mirroring the combo timer's phase gating above.
       updatePowerups(game, dt);
+      // Same continuity fix as the 'dying' case above, run after updateDrive
+      // so it reads this frame's already-moved buggy.worldX. No-ops if
+      // game.boss is null.
+      updateBossMotion(game, dt);
       // See resumeAfterRespawn's docstring: resumes 'boss' (fight still
       // going), pays a stashed boss stage bonus via 'stageClear' (the
       // boss died the same frame the buggy did), or 'playing' (an

@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  startBoss, updateBoss, hitBoss, bossBox, BOMB_OFFSETS, FINAL_HP, FINAL_PHASE2_HP,
+  startBoss, updateBoss, updateBossMotion, hitBoss, bossBox, sweepOffsetAt,
+  BOMB_OFFSETS, FINAL_HP, FINAL_PHASE2_HP,
 } from '../js/boss.js';
 import {
   createGame, updateGame, DT, buggyScreenX, VIEW_W, GROUND_Y, BOSS_ARENA_AHEAD,
@@ -350,6 +351,113 @@ test('buggy death during a boss fight preserves game.boss and resumes the fight 
   n = 0;
   while (g.phase === 'respawning' && n < 200) { step(g); n++; }
   assert.equal(g.phase, 'boss', 'the fight resumes rather than dropping back to playing');
+  assert.ok(g.boss);
+});
+
+// --- cosmetic-polish pass: boss freezes mid-air during death, then snaps ----
+
+test('updateBossMotion ticks the sweep (x, sweepT) but fires nothing, deals no damage, and does not advance the pattern', () => {
+  const g = createGame('classic', 1);
+  g.buggy.worldX = 1000;
+  startBoss(g);
+  g.boss.pattern = 'hover';
+  g.boss.patternT = 0.4;
+  // A player shot sitting exactly inside the boss's hitbox: if
+  // updateBossMotion ever calls collidePlayerShotsVsBoss this would
+  // one-shot a fresh 18hp boss and the shot would be consumed.
+  g.playerShots = [{
+    x: g.boss.x, y: g.boss.y, vx: 0, vy: 0, dir: 'fwd',
+  }];
+  const hpBefore = g.boss.hp;
+  const patternBefore = g.boss.pattern;
+  const attackIndexBefore = g.boss.attackIndex;
+  const telegraphBefore = g.boss.telegraph;
+  const enemyShotsBefore = g.enemyShots.length;
+
+  updateBossMotion(g, DT);
+
+  assert.equal(g.boss.hp, hpBefore, 'no damage from the overlapping player shot');
+  assert.equal(g.playerShots.length, 1, 'the player shot was never resolved/consumed');
+  assert.equal(g.boss.pattern, patternBefore, 'pattern does not advance');
+  assert.equal(g.boss.attackIndex, attackIndexBefore, 'no new attack is chosen');
+  assert.equal(g.boss.telegraph, telegraphBefore, 'telegraph countdown is frozen too');
+  assert.equal(g.enemyShots.length, enemyShotsBefore, 'no bombs/aimed shots fired');
+});
+
+test('updateBossMotion moves b.x/b.sweepT by exactly the same formula updateBoss uses', () => {
+  const g = createGame('classic', 1);
+  g.buggy.worldX = 1000;
+  startBoss(g);
+  g.boss.pattern = 'hover';
+  const sweepTBefore = g.boss.sweepT;
+
+  updateBossMotion(g, DT);
+
+  assert.ok(Math.abs(g.boss.sweepT - (sweepTBefore + DT)) < 1e-9);
+  assert.ok(
+    Math.abs(g.boss.x - (g.buggy.worldX + sweepOffsetAt(g.boss.sweepT))) < 1e-9,
+    'b.x stays pinned to buggy.worldX + sweepOffsetAt(sweepT), the exact FIGHT GEOMETRY formula',
+  );
+});
+
+test('updateBossMotion freezes the sweep clock during a dive, same as updateBoss', () => {
+  const g = createGame('classic', 1);
+  g.buggy.worldX = 1000;
+  startBoss(g);
+  g.boss.pattern = 'diveSweep';
+  const sweepTBefore = g.boss.sweepT;
+
+  updateBossMotion(g, DT);
+
+  assert.equal(g.boss.sweepT, sweepTBefore, 'sweepT does not advance mid-dive');
+});
+
+test('the boss sweep offset from the buggy stays exactly on formula through a mid-fight death — no freeze, no snap on resume', () => {
+  // Reproduces "buggy death during a boss fight preserves game.boss and
+  // resumes the fight after respawn" above, but instead of only checking the
+  // phase at each end, samples g.boss.x - g.buggy.worldX EVERY frame across
+  // the whole dying+respawning window. Before this fix, updateBoss (and
+  // therefore this offset) was simply never advanced during those phases:
+  // the offset held at whatever it was the instant the buggy died, while the
+  // buggy itself teleported backward to the respawn point (see state.js's
+  // respawn()) and drove forward again — so the offset was wrong (stale)
+  // for the whole window and then snapped to the correct formula the frame
+  // 'boss' resumed. Asserting the formula holds on EVERY sampled frame is a
+  // stronger claim than "eventually consistent": it rules out exactly that
+  // freeze-then-snap.
+  const g = createGame('classic', 1);
+  g.phase = 'playing';
+  g.terrain = { mode: 'test', features: [] };
+  const breakIdx = STAGE_BREAKS[0];
+  g.buggy.worldX = checkpointX(breakIdx) - 1;
+  step(g); // -> boss
+  assert.equal(g.phase, 'boss');
+
+  // Force a lethal enemy shot onto the buggy, same technique as the sibling
+  // test above, without waiting out real pattern timing.
+  g.enemyShots.push({
+    id: 'x', kind: 'bomb', from: 'boss', x: g.buggy.worldX + 10, y: 200, vx: 0, vy: 0,
+  });
+  step(g);
+  assert.equal(g.phase, 'dying');
+
+  let sawDying = false;
+  let sawRespawning = false;
+  let n = 0;
+  while (g.phase !== 'boss' && n < 400) {
+    if (g.phase === 'dying') sawDying = true;
+    if (g.phase === 'respawning') sawRespawning = true;
+    if (g.boss) {
+      const expected = sweepOffsetAt(g.boss.sweepT);
+      const actual = g.boss.x - g.buggy.worldX;
+      assert.ok(Math.abs(actual - expected) < 1e-6,
+        `phase ${g.phase} frame ${n}: boss.x must track buggy.worldX + sweepOffsetAt(sweepT) every frame`);
+    }
+    step(g);
+    n++;
+  }
+  assert.ok(sawDying && sawRespawning, 'the death cycle actually ran through both phases');
+  assert.equal(g.phase, 'boss', 'the fight resumed');
   assert.ok(g.boss);
 });
 
