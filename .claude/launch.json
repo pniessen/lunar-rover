@@ -4,8 +4,9 @@
     {
       "name": "lunar-rover-dev",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["--yes", "http-server", "-p", "8420", "-c-1"],
-      "port": 8420
+      "runtimeArgs": ["--yes", "http-server", "-c-1"],
+      "port": 8420,
+      "autoPort": true
     }
   ]
 }
