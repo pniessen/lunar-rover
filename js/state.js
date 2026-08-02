@@ -11,6 +11,8 @@ import {
   checkpointIndexAt, checkpointX,
 } from './terrain.js';
 import { fireDual, updateWeapons } from './weapons.js';
+import { spawnDirector, updateEnemies } from './enemies.js';
+import { mulberry32 } from './rng.js';
 
 export const DT = 1 / 60;          // fixed simulation timestep, seconds
 export const DYING_TIME = 0.9;     // explosion hold before the respawn
@@ -58,6 +60,10 @@ export function createGame(mode = 'classic', seed = 1) {
     powerup: null,
     combo: { count: 0, mult: 1, timer: 0 },
     rngSeed: seed,
+    // Independent stream from the terrain/course rng so wave timing/picks
+    // never perturb (or get perturbed by) terrain generation.
+    waveRng: mulberry32(seed + 1),
+    warn: { air: false, mine: false, rear: false },
   };
   if (game.mode === 'endless') ensureGenerated(game.terrain, GENERATE_AHEAD);
   updateCamera(game);
@@ -130,8 +136,17 @@ export function updateGame(game, input, dt) {
     case 'playing':
       game.stageTime += dt; // stage clock runs only during live play
       updateDrive(game, input, dt, false);
+      spawnDirector(game, dt);
+      updateEnemies(game, dt);
       if (input.pressed('fire')) fireDual(game);
       updateWeapons(game, dt);
+      // updateDrive already handles lives/phase transition for a terrain
+      // kill; this catches a kill that happened inside updateEnemies
+      // (enemy shot, bomb, or chaser ram) this same frame.
+      if (game.phase === 'playing' && !game.buggy.alive) {
+        game.lives -= 1;
+        setPhase(game, 'dying');
+      }
       break;
 
     case 'dying':
@@ -139,7 +154,10 @@ export function updateGame(game, input, dt) {
       // trigger fireDual — the player cannot fire while exploding. Shots
       // already in flight still fly (and can still score) while the buggy
       // explodes, so updateWeapons still runs to move/collide/cull them.
+      // Enemies also keep moving/shooting through the explosion — only
+      // spawnDirector (new waves) is withheld outside 'playing'.
       updateWeapons(game, dt);
+      updateEnemies(game, dt);
       if (game.phaseTimer >= DYING_TIME) {
         if (game.lives <= 0) {
           setPhase(game, 'gameOver');
@@ -153,9 +171,12 @@ export function updateGame(game, input, dt) {
     case 'respawning':
       updateDrive(game, input, dt, true);
       // Invulnerability (skipped terrain collision above) only affects
-      // deaths — the player can still shoot while blinking in.
+      // deaths — the player can still shoot while blinking in. updateEnemies
+      // internally gates its own buggy-collision checks to phase==='playing',
+      // so the invulnerable buggy is safe here too.
       if (input.pressed('fire')) fireDual(game);
       updateWeapons(game, dt);
+      updateEnemies(game, dt);
       if (game.phaseTimer >= RESPAWN_TIME) setPhase(game, 'playing');
       break;
 

@@ -59,6 +59,12 @@ const CRATER_SPRITE = {
 };
 const GROUND_SPRITE = { rock: 'rock', bigRock: 'bigRock' };
 
+// Enemy kind -> sprite built in Task 4; swooper/aimer/bomber reuse the
+// three UFO saucer variants so each kind reads distinctly at a glance.
+const ENEMY_SPRITE = {
+  swooper: 'ufoA', aimer: 'ufoB', bomber: 'ufoC', tank: 'tank', chaser: 'chaser',
+};
+
 function mod(a, n) {
   return ((a % n) + n) % n;
 }
@@ -207,17 +213,12 @@ function drawBuggy(r, game, screenX, by) {
   }
 }
 
-// Enemies/capsules are still empty until Tasks 6/9; these loops are the
-// hook-up points and read a `sprite` name off each entity when it exists.
+// Capsules are still empty until Task 9; this loop is the hook-up point and
+// reads a `sprite` name off each entity when it exists, falling back to the
+// generic capsule sprite.
 function drawEntities(r, game, camX) {
   const { ctx, sprites } = r;
-  const blit = (list, fallback) => {
-    for (const o of list) {
-      const img = sprites[o.sprite] || sprites[fallback];
-      if (!img) continue;
-      ctx.drawImage(img, Math.round(o.x - camX), Math.round(o.y));
-    }
-  };
+
   // Player shots pick their sprite off dir ('fwd' -> shotFwd 2x2, 'up' ->
   // shotUp 1x4) rather than a generic fallback, since a single shot list
   // mixes both kinds of sprite.
@@ -226,9 +227,33 @@ function drawEntities(r, game, camX) {
     if (!img) continue;
     ctx.drawImage(img, Math.round(s.x - camX), Math.round(s.y));
   }
-  blit(game.enemyShots, 'bomb');
-  blit(game.enemies, 'ufoA');
-  blit(game.capsules, 'capsule');
+
+  // Enemy shots: bombs get the dedicated bomb sprite; aimed/level shots
+  // (enemies.js kinds 'aimed'/'level') have no sprite of their own and are
+  // drawn as small colored pixels — red for an aimed shot, white for a
+  // tank's level shot.
+  for (const s of game.enemyShots) {
+    const sx = Math.round(s.x - camX);
+    const sy = Math.round(s.y);
+    if (s.kind === 'bomb') {
+      ctx.drawImage(sprites.bomb, sx, sy);
+    } else {
+      ctx.fillStyle = s.kind === 'aimed' ? '#ff4030' : '#ffffff';
+      ctx.fillRect(sx, sy, 2, 2);
+    }
+  }
+
+  for (const e of game.enemies) {
+    const img = sprites[ENEMY_SPRITE[e.kind]];
+    if (!img) continue;
+    ctx.drawImage(img, Math.round(e.x - camX), Math.round(e.y));
+  }
+
+  for (const o of game.capsules) {
+    const img = sprites[o.sprite] || sprites.capsule;
+    if (!img) continue;
+    ctx.drawImage(img, Math.round(o.x - camX), Math.round(o.y));
+  }
 }
 
 function drawHud(r, game) {
