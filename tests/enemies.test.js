@@ -295,3 +295,69 @@ test('createGame provisions a waveRng function', () => {
   assert.equal(typeof g.waveRng, 'function');
   assert.ok(g.waveRng() >= 0 && g.waveRng() < 1);
 });
+
+// --- real-path reachability: aimers and swoopers vs the up gun -------------
+//
+// Mirrors the REACHABILITY tests in tests/boss.test.js: the kill-path tests
+// above prove hitEnemy works when a shot overlaps an enemy, but they prove
+// nothing about whether a fired shot can ever REACH one. Aimers used to hover
+// pinned at buggy.worldX + 350/400 while the up gun's column is worldX + 16 —
+// geometrically unkillable, with the spec's 100-point aimer award unreachable.
+// These tests never touch game.playerShots: a bot presses 'fire' through
+// updateGame on hazard-free terrain, exactly as a player would.
+
+// Fire-only bot: flat test terrain means no jumping is required, so this is
+// just a trigger finger on a fixed cooldown.
+function firingBot(fireEvery = 15) {
+  let frame = -1;
+  return {
+    tick() { frame++; },
+    state: {},
+    pressed: (n) => n === 'fire' && frame % fireEvery === 0,
+    endFrame() {},
+  };
+}
+
+// Drives a fresh stage-1 classic run on flat terrain until its first wave
+// spawns (seed chosen by the caller so that wave is the kind under test),
+// then lets the bot fight it for up to `seconds`. Lives headroom because the
+// bot never dodges aimed shots — deaths only slow the run down.
+function fightFirstWave(seed, seconds) {
+  const g = createGame('classic', seed);
+  g.phase = 'playing';
+  g.stage = 1;
+  g.lives = 6;
+  g.terrain = { mode: 'test', features: [] };
+  g.waveTimer = 0.001;
+  const input = firingBot();
+  const maxFrames = Math.round(seconds / STATE_DT);
+  for (let i = 0; i < maxFrames && g.phase !== 'gameOver'; i++) {
+    input.tick();
+    updateGame(g, input, STATE_DT);
+  }
+  return g;
+}
+
+test('REACHABILITY: an aimer can be shot down by a player firing through the real input path', () => {
+  // Seed 5's first wave (stage 1, waveTimer pre-armed) is an aimer pair.
+  const g = fightFirstWave(5, 30);
+  const aimerKills = g.scoreEvents.filter((ev) => ev.tag === 'aimer');
+  assert.ok(aimerKills.length >= 1,
+    `at least one aimer dies to a fired shot within 30s (got ${aimerKills.length})`);
+  assert.ok(aimerKills.every((ev) => ev.base === 100), 'aimer kills award the spec\'s 100 points');
+});
+
+test('REACHABILITY: a swooper formation can be fully wiped through the real input path (up-shot speed carry)', () => {
+  // Seed 6's first wave is a swooper formation. Guards the global up-shot
+  // forward-carry in weapons.js's moveShots: without it, up-shots drift
+  // backwards relative to the buggy, and while a lucky shot can still clip
+  // one crossing swooper, sustained fire can no longer track the formation —
+  // a full 3-kill wipe (and its 1000-point bonus) becomes unreachable.
+  // Verified by mutation: deleting `+ game.speed` from moveShots fails this.
+  const g = fightFirstWave(6, 30);
+  const swooperKills = g.scoreEvents.filter((ev) => ev.tag === 'swooper');
+  assert.ok(swooperKills.length >= 3,
+    `the whole formation dies to fired shots within 30s (got ${swooperKills.length})`);
+  assert.ok(g.scoreEvents.some((ev) => ev.tag === 'formation' && ev.base === 1000),
+    'the formation-wipe bonus pays out');
+});

@@ -33,6 +33,8 @@ const WAVE_FLOOR = 3; // seconds, endless-mode difficulty floor
 const AIMER_SHOT_INTERVAL = 2;   // seconds between aimer shots
 const AIMER_SHOT_CAP = 2;        // max of an aimer's own shots alive at once
 const AIMER_SHOT_SPEED = 140;    // px/s
+const AIMER_PATROL_MIN = 6;      // px ahead of the buggy at the patrol's near turn — inside the up gun's column
+const AIMER_PATROL_PERIOD = 6;   // seconds for one full out-and-back patrol
 
 const BOMBER_DROP_INTERVAL = 1.5; // seconds between bomb drops
 const BOMBER_DIP_Y = 140;         // low point of the bomber's dip-and-recover altitude cycle
@@ -102,6 +104,9 @@ function spawnAimerPair(game) {
       hp: 1,
       t: 0,
       hoverOffset: offset,
+      // Staggered periods (6s / 7.5s) so the pair's overhead passes desync
+      // instead of both stacking on the buggy at the same trough.
+      patrolPeriod: AIMER_PATROL_PERIOD * (1 + i * 0.25),
       baseY: y,
     });
   }
@@ -205,6 +210,19 @@ function crossedInterval(t, dt, interval) {
   return Math.floor(t / interval) !== Math.floor((t - dt) / interval);
 }
 
+// Aimer patrol drift — the same class of fix as boss.js's sweepOffsetAt: a
+// flyer pinned at a fixed buggy-relative offset far ahead of the up gun's
+// column (buggy.worldX + 16) is geometrically unkillable, since only up-shots
+// can hit flyers and they hold the column they were fired from. The hover
+// offset instead breathes between the spawn offset and AIMER_PATROL_MIN on a
+// cosine, lingering near the buggy at the trough — that overhead pass is the
+// window where a well-timed up-shot can catch it.
+function aimerPatrolOffset(e) {
+  const period = e.patrolPeriod ?? AIMER_PATROL_PERIOD;
+  const swing = (1 + Math.cos((2 * Math.PI * e.t) / period)) / 2; // 1 at spawn -> 0 at the near turn
+  return AIMER_PATROL_MIN + (e.hoverOffset - AIMER_PATROL_MIN) * swing;
+}
+
 function fireAimedShot(game, e) {
   const b = game.buggy;
   const targetX = b.worldX + BUGGY_W / 2;
@@ -265,7 +283,7 @@ function updateOneEnemy(game, e, dt) {
       break;
     }
     case 'aimer': {
-      if (e.hoverOffset != null) e.x = game.buggy.worldX + e.hoverOffset;
+      if (e.hoverOffset != null) e.x = game.buggy.worldX + aimerPatrolOffset(e);
       const base = e.baseY ?? e.y;
       e.y = base + Math.sin(e.t * 2) * 5;
       if (crossedInterval(e.t, dt, AIMER_SHOT_INTERVAL)) {
