@@ -93,6 +93,12 @@ export function createGame(mode = 'classic', seed = 1) {
     jumpStartX: null,
     extraLivesGranted: [],
     stageClear: null,
+    // Set only in the rare same-frame race where a boss dies in the exact
+    // frame the buggy also dies (see the 'boss' case's buggy-death-takes-
+    // priority handling and resumeAfterRespawn below) — stashes the
+    // checkpoint index enterStageClear needs so the stage bonus is still
+    // paid once the death/respawn cycle finishes, instead of being lost.
+    bossStageClearCheckpoint: null,
     events: [],
     playerShots: [],
     enemyShots: [],
@@ -210,13 +216,23 @@ function updateDrive(game, input, dt, invulnerable) {
  * starting at the checkpoint line (clearZone) so the fight is a fair
  * dodge-and-shoot duel — no pre-placed craters/rocks/mines, just whatever
  * the boss itself drops (bombCarpet's bombs still crater the ground on
- * impact, same as a regular bomber's). The stageClear tally itself still
- * happens — see the 'boss' case in updateGame, which calls enterStageClear
- * once the boss's hp hits 0 — this just delays it behind the fight.
+ * impact, same as a regular bomber's). Also clears any regular wave
+ * enemies/enemy shots still alive from just before the break line (a tank
+ * or a stray aimed shot that crossed into the "cleared" arena would
+ * otherwise still be able to ram/shoot the buggy during the fight,
+ * contradicting the fair-arena design — see review fix round 1, finding
+ * 2). game.playerShots is deliberately left alone: the player's own
+ * in-flight shots carrying into the fight is fine and arguably fair.
+ * The stageClear tally itself still happens — see the 'boss' case in
+ * updateGame, which calls enterStageClear once the boss's hp hits 0 (or,
+ * in the same-frame boss/buggy-death race, resumeAfterRespawn does once
+ * the death cycle finishes) — this just delays it behind the fight.
  */
 function enterBoss(game, checkpointIdx) {
   const arenaStart = checkpointX(checkpointIdx);
   clearZone(game.terrain, arenaStart, arenaStart + BOSS_ARENA_LEN);
+  game.enemies = [];
+  game.enemyShots = [];
   startBoss(game);
   setPhase(game, 'boss');
 }
@@ -308,6 +324,36 @@ function respawn(game) {
   game.jumpStartX = null; // a jump in progress at death never lands
 }
 
+/**
+ * Decides which phase 'respawning' resumes into once RESPAWN_TIME elapses,
+ * and performs that transition. Three cases:
+ *  - game.boss is still alive (a normal mid-fight death, the common case)
+ *    -> resume 'boss' exactly where the fight left off.
+ *  - game.boss is null AND game.bossStageClearCheckpoint was stashed (the
+ *    boss died in the *exact same frame* the buggy did — see the 'boss'
+ *    case below, "buggy death takes priority") -> the stage bonus was
+ *    never paid because the death took priority over the boss-down
+ *    transition that frame, so pay it now via the stashed checkpoint index
+ *    rather than losing it.
+ *  - neither -> an ordinary death during regular play -> 'playing'.
+ * In every case, syncComboCursors() runs last so the whole dying+
+ * respawning window's scoring/eventing is discarded exactly as it always
+ * has been (see that function's docstring) — including, in the middle
+ * case, the transition straight into 'stageClear' rather than 'playing'.
+ */
+function resumeAfterRespawn(game) {
+  if (game.boss) {
+    setPhase(game, 'boss');
+  } else if (game.bossStageClearCheckpoint != null) {
+    const checkpointIdx = game.bossStageClearCheckpoint;
+    game.bossStageClearCheckpoint = null;
+    enterStageClear(game, checkpointIdx);
+  } else {
+    setPhase(game, 'playing');
+  }
+  syncComboCursors(game);
+}
+
 /** Mutate `game` back to a brand-new attract-screen run, in place. */
 function resetToAttract(game) {
   Object.assign(game, createGame(game.mode, game.rngSeed));
@@ -390,16 +436,12 @@ export function updateGame(game, input, dt) {
       // here, though — updatePowerups internally gates that to 'playing'
       // only, mirroring the combo timer's phase gating above.
       updatePowerups(game, dt);
-      if (game.phaseTimer >= RESPAWN_TIME) {
-        // A death mid-boss-fight (game.boss survives dying/respawning
-        // untouched — see the 'boss' case below) resumes the fight rather
-        // than dropping back to plain 'playing'.
-        setPhase(game, game.boss ? 'boss' : 'playing');
-        // Discard anything scored/evented across the whole dying+respawning
-        // window (see syncComboCursors' docstring) — a death is a clean
-        // slate, not a lump of free combo the instant play resumes.
-        syncComboCursors(game);
-      }
+      // See resumeAfterRespawn's docstring: resumes 'boss' (fight still
+      // going), pays a stashed boss stage bonus via 'stageClear' (the
+      // boss died the same frame the buggy did), or 'playing' (an
+      // ordinary death) — and discards anything scored/evented across the
+      // whole dying+respawning window (syncComboCursors) either way.
+      if (game.phaseTimer >= RESPAWN_TIME) resumeAfterRespawn(game);
       break;
 
     case 'stageClear':
@@ -429,7 +471,7 @@ export function updateGame(game, input, dt) {
       updateDrive(game, input, dt, false);
       if (game.phase !== 'boss') break; // a terrain hit above already moved us to 'dying'
 
-      updateEnemies(game, dt); // moves/culls the boss's bombs & aimed shots (game.enemyShots)
+      updateEnemies(game, dt); // moves/culls the boss's bombs & aimed shots (game.enemyShots); may kill the buggy
 
       // bossWasAlive/game.boss-after comparison, not a 'bossDown' events
       // scan: game.events is a whole-run log only main.js clears, so an
@@ -437,13 +479,38 @@ export function updateGame(game, input, dt) {
       // ago. A before/after null check on this exact call is unambiguous.
       const bossWasAlive = !!game.boss;
       updateBoss(game, dt); // pattern machine + player-shot-vs-boss + hitBoss/bossDown
-      if (bossWasAlive && !game.boss) {
-        // The boss just died this frame: hitBoss() already paid bossKill,
-        // dropped the guaranteed capsule, and pushed 'bossDown'. Resume the
-        // exact same stageClear tally flow a non-boss break used to enter
-        // directly — game.checkpoint is still the break index (E/J/O/T/Z)
-        // that started this fight, so isCourseEnd/COURSE_BONUS/champion
-        // handling all fall out of enterStageClear() unchanged.
+      const bossJustDied = bossWasAlive && !game.boss;
+
+      // Buggy death takes priority over a same-frame boss death (review
+      // fix round 1, finding 1): a boss bomb/aimed shot landing on the
+      // buggy in updateEnemies() above and the player's own shot dropping
+      // the boss to 0 in updateBoss() above can both happen in this same
+      // frame. Entering 'stageClear' first (the original bug) ran the
+      // whole ~2.5s scripted intermission over a visibly dead, frozen
+      // buggy with no life deducted and no dying/respawn flow — the life
+      // loss only ever caught up ~2.5s later via a stale check. The buggy
+      // dying always wins: go to 'dying' now, deducting the life and
+      // resetting combo exactly like any other death. hitBoss() already
+      // ran unconditionally above (bossKill awarded, capsule dropped,
+      // 'bossDown' pushed, game.boss nulled) — the bonus isn't lost, it's
+      // just deferred: stash the checkpoint index and let
+      // resumeAfterRespawn() enter 'stageClear' once the death/respawn
+      // cycle completes instead of doing it now.
+      if (!game.buggy.alive) {
+        if (bossJustDied) game.bossStageClearCheckpoint = game.checkpoint;
+        game.lives -= 1;
+        setPhase(game, 'dying');
+        resetCombo(game);
+        break;
+      }
+
+      if (bossJustDied) {
+        // The boss died this frame and the buggy is still alive — the
+        // common case. Resume the exact same stageClear tally flow a
+        // non-boss break used to enter directly — game.checkpoint is
+        // still the break index (E/J/O/T/Z) that started this fight, so
+        // isCourseEnd/COURSE_BONUS/champion handling all fall out of
+        // enterStageClear() unchanged.
         enterStageClear(game, game.checkpoint);
         break;
       }
@@ -451,9 +518,10 @@ export function updateGame(game, input, dt) {
       if (input.pressed('fire')) fireDual(game);
       updateWeapons(game, dt);
 
-      // Mirrors 'playing': a kill inside updateEnemies (a boss bomb/aimed
-      // shot connecting) this same frame still needs to be caught here —
-      // updateDrive's own terrain-collision check already ran earlier.
+      // Defensive mirror of 'playing': updateWeapons never actually kills
+      // the buggy (player shots only ever hit terrain/the boss), so this
+      // is unreachable in practice today, but it costs nothing to keep the
+      // same shape as 'playing' in case that ever changes.
       if (game.phase === 'boss' && !game.buggy.alive) {
         game.lives -= 1;
         setPhase(game, 'dying');

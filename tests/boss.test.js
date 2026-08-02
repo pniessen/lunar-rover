@@ -326,3 +326,88 @@ test('clearZone carves the boss arena from the checkpoint line at every stage br
   assert.equal(g.phase, 'boss');
   assert.equal(featuresInRange(g.terrain, arenaX - 5, arenaX + 20).length, 0);
 });
+
+// --- review fix round 1 regressions ---------------------------------------
+
+// FINDING 1 (Critical): a boss bomb/aimed shot killing the buggy in
+// updateEnemies() and the player's shot dropping the boss to 0 in
+// updateBoss() could both land in the exact same updateGame() call. The
+// original code let the bossWasAlive->null transition win, entering
+// 'stageClear' immediately over a visibly dead, frozen buggy — no life
+// deducted, no dying/respawn flow, until a stale 'playing'-phase check
+// caught up ~2.5s later. Buggy death must always take priority; the boss's
+// stage bonus is deferred (via game.bossStageClearCheckpoint) rather than
+// lost, and paid out once the death/respawn cycle completes.
+test('same-frame boss-death + buggy-death race: buggy death wins immediately, bonus is paid after respawn', () => {
+  const g = createGame('classic', 1);
+  g.phase = 'playing';
+  g.terrain = { mode: 'test', features: [] };
+  const breakIdx = STAGE_BREAKS[0]; // E
+  g.buggy.worldX = checkpointX(breakIdx) - 1;
+
+  step(g); // playing -> boss
+  assert.equal(g.phase, 'boss');
+
+  // Line up a simultaneous kill: a lethal enemy shot overlapping the buggy
+  // AND a lethal player shot overlapping the boss, both resolved within the
+  // same updateGame() call.
+  g.boss.hp = 1;
+  g.playerShots = [{ x: g.boss.x + 10, y: g.boss.y + 5, vx: 300, vy: 0, dir: 'fwd' }];
+  g.enemyShots = [{ id: 'x', kind: 'bomb', from: 'boss', x: g.buggy.worldX + 10, y: 200, vx: 0, vy: 0 }];
+  const livesBefore = g.lives;
+  const scoreEventsBefore = g.scoreEvents.length;
+
+  step(g);
+
+  assert.equal(g.phase, 'dying', 'the buggy death takes priority over the boss-down transition this frame');
+  assert.equal(g.buggy.alive, false);
+  assert.equal(g.lives, livesBefore - 1, 'exactly one life is deducted for this death cycle');
+  assert.equal(g.boss, null, 'the boss is still resolved as dead this same frame');
+  assert.ok(
+    g.scoreEvents.slice(scoreEventsBefore).some((ev) => ev.tag === 'bossKill'),
+    'bossKill is still awarded even though the transition to stageClear is deferred',
+  );
+  assert.equal(g.bossStageClearCheckpoint, breakIdx, 'the checkpoint is stashed so the bonus is not lost');
+
+  // Run out dying -> respawning -> (deferred) stageClear -> playing, and
+  // confirm no second life is ever deducted along the way.
+  let n = 0;
+  while (g.phase === 'dying' && n < 200) { step(g); n++; }
+  assert.equal(g.phase, 'respawning');
+  assert.equal(g.lives, livesBefore - 1, 'still only one life lost');
+
+  n = 0;
+  while (g.phase === 'respawning' && n < 200) { step(g); n++; }
+  assert.equal(g.phase, 'stageClear', 'the deferred boss stage bonus is entered once respawn completes');
+  assert.equal(g.bossStageClearCheckpoint, null, 'the stash is consumed');
+  assert.equal(g.lives, livesBefore - 1, 'still only one life lost');
+
+  const scoreAtStageClearEntry = g.score;
+  n = 0;
+  while (g.phase === 'stageClear' && n < 20000) { step(g); n++; }
+  assert.equal(g.phase, 'playing', 'stageClear finishes normally, bumping stage');
+  assert.equal(g.stage, 1);
+  assert.ok(g.score > scoreAtStageClearEntry, 'the stage bonus tally actually paid out');
+  assert.equal(g.lives, livesBefore - 1, 'still only one life lost across the whole cycle');
+});
+
+// FINDING 2 (Important): enterBoss cleared terrain features via clearZone
+// but left game.enemies/game.enemyShots untouched — a wave enemy (or its
+// in-flight shot) still alive right at the break line would survive into
+// the "cleared" arena and could ram/shoot the buggy during the fight,
+// contradicting the fair-arena design.
+test('crossing a stage break clears stale wave enemies and enemy shots out of the arena', () => {
+  const g = createGame('classic', 1);
+  g.phase = 'playing';
+  g.terrain = { mode: 'test', features: [] };
+  const breakIdx = STAGE_BREAKS[0];
+  g.buggy.worldX = checkpointX(breakIdx) - 1;
+  g.enemies = [{ id: 1, kind: 'tank', x: g.buggy.worldX + 50, y: 0, vx: 0, vy: 0, hp: 1, t: 0 }];
+  g.enemyShots = [{ id: 2, kind: 'level', from: 1, x: g.buggy.worldX + 50, y: 0, vx: -1, vy: 0 }];
+
+  step(g); // playing -> boss
+
+  assert.equal(g.phase, 'boss');
+  assert.deepEqual(g.enemies, [], 'stale wave enemies do not survive into the boss arena');
+  assert.deepEqual(g.enemyShots, [], 'stale enemy shots do not survive into the boss arena');
+});
