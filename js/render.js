@@ -585,12 +585,35 @@ function drawEnterScore(ctx, game) {
   centerText(ctx, 'FIRE TO ENTER', 160, '#ffffff', 1);
 }
 
+// Full keyboard map, shown on the attract screen (finding I6 — P/R/N/B/C
+// existed but were undiscoverable). Two lines so they fit the 384px viewport
+// at the 1x bitmap font (6px per glyph).
+const CONTROL_HINTS = [
+  'ARROWS/AD DRIVE   SPACE/W JUMP   X/Z FIRE',
+  'P PAUSE  R RESTART  M MUTE  N MUSIC  B SFX  C CRT',
+];
+
 function drawOverlays(r, game, screenX, by) {
   const { ctx, sprites } = r;
 
-  if (game.phase === 'attract') {
-    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  // Pause (finding I5) takes over every other overlay: the world underneath
+  // is frozen (updateGame early-returns while game.paused) but still drawn,
+  // so the player can see exactly the frame they stopped on.
+  if (game.paused) {
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
     ctx.fillRect(0, HUD_H, VIEW_W, GROUND_Y - HUD_H);
+    centerText(ctx, 'PAUSED', 100, '#ffe060', 2);
+    centerText(ctx, 'P TO RESUME   R TO RESTART', 124, '#ffffff', 1);
+    return;
+  }
+
+  if (game.phase === 'attract') {
+    // Dims the whole play area INCLUDING the terrain strip (unlike every
+    // other overlay, which stops at GROUND_Y): the control-hint block below
+    // sits on the regolith, and it needs the same backdrop as the menu above
+    // it to stay legible against a bright stage palette.
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(0, HUD_H, VIEW_W, VIEW_H - HUD_H);
     centerText(ctx, 'LUNAR ROVER', 83, '#3a0f26', 3);
     centerText(ctx, 'LUNAR ROVER', 81, '#ff8fc8', 3);
     centerText(ctx, 'RETRO-MOD', 110, '#7fd8ff', 1);
@@ -622,8 +645,15 @@ function drawOverlays(r, game, screenX, by) {
     }
 
     if (blink) {
-      centerText(ctx, 'PRESS FIRE', 186, '#ffffff', 1);
+      centerText(ctx, 'PRESS FIRE', 182, '#ffffff', 1);
     }
+
+    // The full control map, dimmed, below the prompt (finding I6). Drawn over
+    // the terrain strip rather than inside the dimmed panel — there is no
+    // vertical room left above GROUND_Y, and the dim grey reads fine against
+    // the regolith.
+    centerText(ctx, CONTROL_HINTS[0], 206, '#c8d4e0', 1);
+    centerText(ctx, CONTROL_HINTS[1], 216, '#c8d4e0', 1);
     return;
   }
 

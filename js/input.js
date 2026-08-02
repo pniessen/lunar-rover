@@ -8,6 +8,10 @@ const KEYMAP = {
   Space: 'jump', ArrowUp: 'jump', KeyW: 'jump',
   KeyX: 'fire', KeyZ: 'fire', KeyJ: 'fire', KeyK: 'fire',
   KeyP: 'pause', KeyM: 'mute', KeyR: 'restart',
+  // Separate music / SFX toggles (final-review finding I6): M is the global
+  // mute (master gain), N and B independently silence the music bed and the
+  // sound effects. All three persist through audio.js's localStorage prefs.
+  KeyN: 'music', KeyB: 'sfx',
   // C toggles the CRT overlay (Task 14). Deliberately keyboard-only: the
   // touch layout stays minimal (drive / jump / fire), so there is no on-screen
   // CRT button — see css/style.css and the task-14 report.
@@ -22,6 +26,7 @@ export function createInput(touchRoot) {
   const state = {
     accel: false, brake: false, jump: false, fire: false,
     pause: false, mute: false, restart: false, crt: false,
+    music: false, sfx: false,
   };
   const just = new Set();
   const set = (a, v) => {

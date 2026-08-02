@@ -135,6 +135,10 @@ export function createGame(mode = 'classic', seed = 1) {
     // updateGame decrements it and skips the whole simulation while it is
     // >0 (see updateGame). Cleared by every phase transition.
     freeze: 0,
+    // P-key pause (finding I5). While true, updateGame is a no-op — see
+    // togglePause/updateGame. Always false on a fresh game, so both
+    // resetToAttract() and restartRun() clear it for free.
+    paused: false,
     // High-score initials entry ({slots:['A','A','A'], index:0}) while
     // phase==='enterScore'; null otherwise. See endRun/the 'enterScore' case.
     initialsEntry: null,
@@ -558,6 +562,50 @@ function startSelectedRun(game, seed) {
   setPhase(game, 'playing');
 }
 
+// Phases P can pause and R can restart from — every phase that is part of a
+// live run. 'attract' and 'gameOver' are deliberately excluded: there is
+// nothing to pause on a menu, and restarting from one would skip the mode
+// selection the player is standing in front of. (Task 14's initials picker,
+// 'enterScore', counts as in-run: it is still the run's own end sequence.)
+const IN_RUN_PHASES = new Set([
+  'playing', 'dying', 'respawning', 'boss', 'stageClear', 'enterScore',
+]);
+
+/**
+ * togglePause(game) — the P key (finding I5). No-op outside a live run.
+ * Returns the resulting paused state so the caller can react (main.js keeps
+ * rendering either way, and stops feeding the audio scheduler while paused).
+ *
+ * The pause itself is enforced by updateGame's early return below rather than
+ * by the caller skipping the call, so "paused" means the same thing to every
+ * caller — the browser loop, a test, anything — and cannot be half-implemented.
+ */
+export function togglePause(game) {
+  if (!IN_RUN_PHASES.has(game.phase)) return false;
+  game.paused = !game.paused;
+  return game.paused;
+}
+
+/**
+ * restartRun(game, seed) — the R key (finding I5). Instantly abandons the
+ * current run and starts a fresh one of the SAME mode, straight into
+ * 'playing' (no attract screen, arcade-style). No-op on the attract screen,
+ * where the player is choosing a mode and R would bypass that choice.
+ *
+ * `seed` follows the same rule as updateGame's: presentation owns entropy, so
+ * main.js passes Date.now() and a test can pass a fixed number (or nothing,
+ * reusing the current run's seed) and stay deterministic.
+ * Returns true if a restart actually happened.
+ */
+export function restartRun(game, seed) {
+  if (!IN_RUN_PHASES.has(game.phase)) return false;
+  const mode = game.mode;
+  const runSeed = seed != null ? seed : game.rngSeed;
+  Object.assign(game, createGame(mode, runSeed));
+  setPhase(game, 'playing');
+  return true;
+}
+
 /**
  * @param {object} game
  * @param {object} input
@@ -570,6 +618,13 @@ function startSelectedRun(game, seed) {
  *   seeded mulberry32 RNGs (game.rngSeed/game.waveRng), never this.
  */
 export function updateGame(game, input, dt, seed) {
+  // Pause (finding I5). A hard freeze of the entire simulation — no movement,
+  // no timers, no input, not even phaseTimer — held until togglePause() flips
+  // it back. Deliberately checked before the hit-stop countdown below so a
+  // pause during a hit-stop resumes with that freeze intact. Presentation
+  // keeps rendering (main.js draws the PAUSED overlay over the frozen world).
+  if (game.paused) return;
+
   // Hit-stop (Task 14). A kill sets game.freeze (0.03s for a regular enemy,
   // 0.08s for a boss); until it drains, this whole function is a no-op apart
   // from the countdown itself — no movement, no timers, no input, not even

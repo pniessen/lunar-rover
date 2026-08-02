@@ -3,7 +3,9 @@
 // simulation lives in state.js, drawing in render.js.
 
 import { createInput } from './input.js';
-import { createGame, updateGame, DT, VIEW_W, VIEW_H } from './state.js';
+import {
+  createGame, updateGame, togglePause, restartRun, DT, VIEW_W, VIEW_H,
+} from './state.js';
 import { createRenderer, render, toggleCrt } from './render.js';
 import { createAudio } from './audio.js';
 import { notifyGameEventsCleared } from './combo.js';
@@ -75,13 +77,22 @@ function loop(t) {
   let steps = 0;
   while (acc >= DT) {
     steps++;
-    // The 4th argument is the ONLY place Date.now()-derived entropy is
-    // allowed to reach state.js — it stays a pure, Node-testable module
-    // that never calls Date.now()/Math.random() itself (see updateGame's
-    // docstring). It's read every step but only actually consumed on the
-    // exact frame the attract screen's mode-select menu is dismissed
-    // (jump/fire pressed while game.phase==='attract'), seeding that run's
-    // terrain/wave RNGs so repeated plays don't all replay the same layout.
+    // Pause and restart are read here, INSIDE the fixed-timestep loop, for
+    // the reason spelled out on the mute toggle below — and before
+    // updateGame, so a press lands on this very step rather than a frame
+    // late. Both are no-ops outside a live run; state.js owns that rule (see
+    // togglePause/restartRun) so it is testable there rather than buried in
+    // this untested boot file.
+    if (input.pressed('pause')) togglePause(game);
+    if (input.pressed('restart')) restartRun(game, Date.now());
+    // The 4th argument (and restartRun's `seed` above) is the ONLY place
+    // Date.now()-derived entropy is allowed to reach state.js — it stays a
+    // pure, Node-testable module that never calls Date.now()/Math.random()
+    // itself (see updateGame's docstring). It's read every step but only
+    // actually consumed on the exact frame the attract screen's mode-select
+    // menu is dismissed (jump/fire pressed while game.phase==='attract'),
+    // seeding that run's terrain/wave RNGs so repeated plays don't all replay
+    // the same layout.
     updateGame(game, input, DT, Date.now());
     // input.pressed() is "just pressed this sim step" and is aged away by
     // endFrame() below — so the mute toggle has to be read here, inside the
@@ -92,6 +103,10 @@ function loop(t) {
     // most one of those steps has `pressed('mute')` true, so a single key
     // press toggles exactly once.
     if (input.pressed('mute')) audio.toggleMuted();
+    // N / B: independent music and SFX toggles (finding I6). Both persist via
+    // audio.js's own localStorage prefs, same as M's master mute.
+    if (input.pressed('music')) audio.setMusicOn(!audio.musicOn);
+    if (input.pressed('sfx')) audio.setSfxOn(!audio.sfxOn);
     // CRT overlay toggle (C). Read inside the fixed-timestep loop for exactly
     // the same reason as mute above: input.pressed() is "just pressed this
     // sim step" and is aged away by endFrame(), so a check outside this loop
@@ -108,7 +123,15 @@ function loop(t) {
   render(renderer, game, acc / DT, steps * DT);
   // Audio consumes this frame's events after render (render itself doesn't
   // read game.events) but before the single clear point below.
-  audio.processEvents(game.events, game);
+  //
+  // While paused, the audio pass is skipped entirely (finding I5):
+  // processEvents is what feeds the music scheduler, so not calling it stops
+  // new notes from being queued and the bed fades out as the last scheduled
+  // ~0.4s of envelopes ring off. Resuming cannot burst: updateMusic's Task-9
+  // forward clamp (music.nextTime < ctx.currentTime -> now + 0.02) discards
+  // the missed steps instead of walking them, exactly as it does for a
+  // backgrounded tab.
+  if (!game.paused) audio.processEvents(game.events, game);
   game.events.length = 0;
   // combo.js's updateCombo keeps a cursor into game.events (see its
   // docstring) that must be invalidated in lockstep with this clear —

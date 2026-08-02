@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createGame, updateGame, buggyScreenX, qualifiesForHighScore,
+  togglePause, restartRun,
   DT, DYING_TIME, RESPAWN_TIME, HIGH_SCORE_SLOTS, INITIALS_LEN,
   HIT_STOP_ENEMY, HIT_STOP_BOSS, GROUND_Y,
 } from '../js/state.js';
@@ -513,4 +514,102 @@ test('endless mode generates terrain ahead of the buggy', () => {
   g.phase = 'playing';
   step(g, noInput, 60);
   assert.ok(g.terrain.generatedTo > g.buggy.worldX);
+});
+
+// --- FINAL REVIEW finding I5: P (pause) and R (restart) --------------------
+//
+// Both keys were mapped in input.js from Task 1 onward and wired to nothing.
+// The behavior lives here, in the pure module, rather than in main.js's
+// untested boot code, so these are the tests that hold it.
+
+test('pause freezes the entire simulation, and resuming picks up where it stopped', () => {
+  const g = createGame('classic', 1);
+  g.phase = 'playing';
+  g.terrain = { mode: 'test', features: [] };
+
+  for (let i = 0; i < 10; i++) updateGame(g, noInput, DT);
+  const snapshot = {
+    worldX: g.buggy.worldX, score: g.score, stageTime: g.stageTime,
+    phaseTimer: g.phaseTimer, camX: g.camX,
+  };
+
+  assert.equal(togglePause(g), true);
+  for (let i = 0; i < 120; i++) updateGame(g, press('accel', 'jump', 'fire'), DT);
+
+  assert.equal(g.buggy.worldX, snapshot.worldX, 'the buggy does not move while paused');
+  assert.equal(g.stageTime, snapshot.stageTime, 'the stage clock does not run');
+  assert.equal(g.phaseTimer, snapshot.phaseTimer, 'not even phaseTimer advances');
+  assert.equal(g.score, snapshot.score);
+  assert.equal(g.camX, snapshot.camX);
+  assert.equal(g.playerShots.length, 0, 'input is ignored — no shots, no jump');
+  assert.equal(g.buggy.airborne, false);
+
+  assert.equal(togglePause(g), false);
+  updateGame(g, noInput, DT);
+  assert.ok(g.buggy.worldX > snapshot.worldX, 'the run continues on resume');
+});
+
+test('pause is a no-op on the attract screen and on game over', () => {
+  const g = createGame('classic', 1);
+  assert.equal(g.phase, 'attract');
+  assert.equal(togglePause(g), false);
+  assert.equal(g.paused, false);
+  // ...and the menu still responds.
+  updateGame(g, press('accel'), DT);
+  assert.equal(g.menuIndex, 1);
+
+  g.phase = 'gameOver';
+  assert.equal(togglePause(g), false);
+  assert.equal(g.paused, false);
+});
+
+test('pause works in every in-run phase, including a boss fight', () => {
+  for (const phase of ['playing', 'dying', 'respawning', 'boss', 'stageClear', 'enterScore']) {
+    const g = createGame('classic', 1);
+    g.phase = phase;
+    assert.equal(togglePause(g), true, `${phase} is pausable`);
+    assert.equal(togglePause(g), false, `${phase} unpauses`);
+  }
+});
+
+test('restart drops straight into a fresh playing run of the same mode', () => {
+  const g = createGame('endless', 1);
+  g.phase = 'playing';
+  g.score = 12345;
+  g.lives = 1;
+  g.stage = 3;
+  g.checkpoint = 12;
+  g.buggy.worldX = 9000;
+  g.capsules = [{ x: 1, y: 1, vy: 20, type: 'shield', grounded: false, groundedTime: 0 }];
+  g.paused = true;
+
+  assert.equal(restartRun(g, 4242), true);
+
+  assert.equal(g.phase, 'playing', 'no detour through the attract screen');
+  assert.equal(g.mode, 'endless', 'the mode is preserved');
+  assert.equal(g.score, 0);
+  assert.equal(g.lives, 3);
+  assert.equal(g.stage, 0);
+  assert.equal(g.checkpoint, 0);
+  assert.equal(g.buggy.worldX, 0);
+  assert.equal(g.capsules.length, 0);
+  assert.equal(g.paused, false, 'a restart also clears a pause');
+  assert.equal(g.rngSeed, 4242, 'the caller-supplied seed becomes the run seed');
+});
+
+test('restart works from every in-run phase but is a no-op on attract', () => {
+  for (const phase of ['playing', 'dying', 'respawning', 'boss', 'stageClear', 'enterScore']) {
+    const g = createGame('classic', 1);
+    g.phase = phase;
+    g.score = 500;
+    assert.equal(restartRun(g, 9), true, `${phase} restarts`);
+    assert.equal(g.phase, 'playing');
+    assert.equal(g.score, 0);
+  }
+
+  const attract = createGame('classic', 1);
+  attract.menuIndex = 1;
+  assert.equal(restartRun(attract, 9), false, 'R must not bypass the mode-select menu');
+  assert.equal(attract.phase, 'attract');
+  assert.equal(attract.menuIndex, 1, 'and must not disturb the selection');
 });
