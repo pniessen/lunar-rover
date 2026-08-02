@@ -18,6 +18,7 @@ import { GROUND_Y } from './state.js';
 import { BUGGY_W } from './buggy.js';
 import { award } from './score.js';
 import { spawnCapsule } from './powerups.js';
+import { pushFx } from './particles.js';
 
 // --- tunables / balance guardrails ------------------------------------------
 //
@@ -279,6 +280,10 @@ export function hitBoss(game, damage = 1) {
 
   b.hp -= damage;
   award(game, 200, 'bossHit');
+  // Visual-only channel (see particles.js): every connecting shot throws a
+  // light spark scatter off the hull. No audio event and no screen shake —
+  // a 40hp fight would rattle the screen continuously otherwise.
+  pushFx(game, 'spark', b.x + BOSS_W / 2, b.y + BOSS_H / 2);
 
   if (b.isFinal && !b.phase2 && b.hp <= FINAL_PHASE2_HP) {
     b.phase2 = true;
@@ -286,6 +291,11 @@ export function hitBoss(game, damage = 1) {
 
   if (b.hp <= 0) {
     game.events.push('bossDown');
+    // The big one: render.js maps 'bossDown' to a double boom burst and the
+    // 10px screen shake. Hit-stop is longer than a regular kill's 0.03 —
+    // dropping a mothership should stop the world for a beat.
+    pushFx(game, 'bossDown', b.x + BOSS_W / 2, b.y + BOSS_H / 2);
+    game.freeze = 0.08;
     award(game, 2000 + game.stage * 1000, 'bossKill');
     spawnCapsule(game, b.x, b.y);
     game.boss = null;

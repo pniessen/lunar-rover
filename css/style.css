@@ -65,10 +65,16 @@ body.touch #touch-ui {
   pointer-events: auto;
 }
 
+/* 72px is the minimum comfortable thumb target; both buttons sit inside the
+   safe-area inset so a notch/home-indicator never eats them. They are placed
+   from the RIGHT edge and the speed zone from the LEFT (40%), so on the
+   narrowest supported landscape viewport (812x375) the two regions still
+   leave a clear gap: 40% of 812 = 325px of speed zone, buttons occupy
+   x >= 812 - 24 - 72 - 12 - 72 = 632. */
 #btn-jump,
 #btn-fire {
   position: absolute;
-  bottom: 24px;
+  bottom: calc(20px + env(safe-area-inset-bottom, 0px));
   width: 72px;
   height: 72px;
   border-radius: 50%;
@@ -76,19 +82,82 @@ body.touch #touch-ui {
   background: rgba(255, 255, 255, 0.15);
   color: #fff;
   font: bold 12px monospace;
+  letter-spacing: 1px;
   pointer-events: auto;
+  touch-action: none;
   -webkit-tap-highlight-color: transparent;
 }
 
 #btn-fire {
-  right: 24px;
+  right: calc(20px + env(safe-area-inset-right, 0px));
 }
 
 #btn-jump {
-  right: 108px;
+  right: calc(104px + env(safe-area-inset-right, 0px));
 }
 
 #btn-jump:active,
 #btn-fire:active {
   background: rgba(255, 255, 255, 0.35);
+}
+
+/* Portrait prompt. The game's 384x240 buffer is 8:5, so a portrait phone
+   letterboxes it down to an unplayable strip with no room for the thumb
+   controls. Hidden by default and revealed purely by the media query below —
+   no JS involved, and no dependence on body.touch, since a portrait viewport
+   this narrow is a phone/tablet either way. */
+#rotate-prompt {
+  display: none;
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  background: #000;
+  color: #ffe060;
+  font: bold 16px monospace;
+  letter-spacing: 2px;
+  text-align: center;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 4px;
+  padding: 24px;
+}
+
+#rotate-prompt p {
+  margin: 0;
+}
+
+#rotate-prompt .sub {
+  color: #7fd8ff;
+  font-size: 11px;
+  letter-spacing: 1px;
+}
+
+#rotate-prompt .rotate-icon {
+  width: 46px;
+  height: 74px;
+  margin-bottom: 18px;
+  border: 3px solid #ffe060;
+  border-radius: 8px;
+  font-size: 0;
+  animation: rotate-hint 2.2s ease-in-out infinite;
+}
+
+@keyframes rotate-hint {
+  0%, 35% { transform: rotate(0deg); }
+  65%, 100% { transform: rotate(-90deg); }
+}
+
+@media (orientation: portrait) and (max-width: 820px) {
+  #rotate-prompt {
+    display: flex;
+  }
+}
+
+/* Respect a reduced-motion preference for the rotate hint. */
+@media (prefers-reduced-motion: reduce) {
+  #rotate-prompt .rotate-icon {
+    animation: none;
+    transform: rotate(-90deg);
+  }
 }

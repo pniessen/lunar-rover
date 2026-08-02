@@ -13,6 +13,7 @@ import { GROUND_Y } from './state.js';
 import { BUGGY_W } from './buggy.js';
 import { destroyFeature, featuresInRange } from './terrain.js';
 import { award } from './score.js';
+import { pushFx } from './particles.js';
 
 export const SHOT_SPEED_FWD = 300; // px/s, relative to world; buggy speed is added on top
 export const SHOT_SPEED_UP = 260;  // px/s, upward (vy is negative)
@@ -128,6 +129,10 @@ function collideShots(game) {
     if (result.destroyed) {
       award(game, 100, 'rockShot');
       game.events.push('explosion');
+      // Visual twin of the audio event, carrying the position game.events
+      // cannot (see particles.js): centered on the destroyed feature, a
+      // little above the ground line where the rock/mine actually sat.
+      pushFx(game, 'boom', hit.x + hit.w / 2, GROUND_Y - 6);
     }
   }
   game.playerShots = kept;

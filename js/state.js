@@ -17,11 +17,13 @@ import { updatePowerups } from './powerups.js';
 import { startBoss, updateBoss } from './boss.js';
 import { mulberry32 } from './rng.js';
 import {
-  award, featuresJumped, stageBonus, SCORES, STAGE_PAR, COURSE_BONUS,
+  award, featuresJumped, stageBonus, loadScores, submitScore,
+  SCORES, STAGE_PAR, COURSE_BONUS,
 } from './score.js';
 import {
   createCombo, updateCombo, resetCombo, syncComboCursors,
 } from './combo.js';
+import { pushFx } from './particles.js';
 
 export const DT = 1 / 60;          // fixed simulation timestep, seconds
 export const DYING_TIME = 0.9;     // explosion hold before the respawn
@@ -32,6 +34,8 @@ export const VIEW_W = 384;
 export const VIEW_H = 240;
 export const GROUND_Y = 200;       // top of the terrain strip
 export const HUD_H = 36;
+export const HIGH_SCORE_SLOTS = 10; // table depth submitScore() trims to
+export const INITIALS_LEN = 3;
 
 // Buggy is driven with no-op input during the stageClear intermission — it
 // keeps scrolling for the visual effect, but accel/brake/jump/fire are all
@@ -113,6 +117,25 @@ export function createGame(mode = 'classic', seed = 1) {
     // paid once the death/respawn cycle finishes, instead of being lost.
     bossStageClearCheckpoint: null,
     events: [],
+    // Task 14 — the parallel VISUAL event channel. game.events stays the
+    // AUDIO channel (bare strings, consumed by audio.js); game.fx carries
+    // {kind,x,y} entries so the renderer knows *where* to throw particles and
+    // how hard to shake, which the string events never encoded. Written via
+    // particles.js's pushFx from enemies/weapons/boss/state; consumed AND
+    // cleared by render.js every frame, exactly like main.js clears
+    // game.events. Split rather than merged so no audio handler or its tests
+    // had to change.
+    fx: [],
+    // Hit-stop, in seconds of remaining freeze. Set by enemy/boss kills;
+    // updateGame decrements it and skips the whole simulation while it is
+    // >0 (see updateGame). Cleared by every phase transition.
+    freeze: 0,
+    // High-score initials entry ({slots:['A','A','A'], index:0}) while
+    // phase==='enterScore'; null otherwise. See endRun/the 'enterScore' case.
+    initialsEntry: null,
+    // The initials just submitted this run, so the gameOver table can
+    // highlight the player's own fresh row. null until a run is entered.
+    lastInitials: null,
     playerShots: [],
     enemyShots: [],
     enemies: [],
@@ -133,6 +156,64 @@ export function createGame(mode = 'classic', seed = 1) {
 function setPhase(game, phase) {
   game.phase = phase;
   game.phaseTimer = 0;
+  // A phase transition always cancels any pending hit-stop: a kill landing
+  // in the same frame the buggy dies (or a boss fight ends) must never leave
+  // the new phase frozen for its first frames.
+  game.freeze = 0;
+}
+
+/**
+ * The single death path (Task 14 refactor of four identical call sites):
+ * spend a life, enter 'dying', drop the combo, and throw the explosion
+ * particles at the buggy. Keeping the fx push here rather than in
+ * buggy.js's killBuggy is deliberate — killBuggy also fires when a shield
+ * absorbs a hit (returning false, no death), and it has no access to
+ * GROUND_Y (state.js owns that constant, and buggy.js importing it would
+ * add a cycle for no gain).
+ */
+function enterDying(game) {
+  game.lives -= 1;
+  setPhase(game, 'dying');
+  resetCombo(game);
+  pushFx(game, 'boom', game.buggy.worldX + BUGGY_W / 2, GROUND_Y + game.buggy.y - 10);
+}
+
+/**
+ * True when `score` would land in the mode's top-HIGH_SCORE_SLOTS table.
+ * A zero score never qualifies (an instant triple-death should not prompt
+ * for initials). Exported for tests and for any caller that wants to know
+ * before the run actually ends.
+ */
+export function qualifiesForHighScore(mode, score) {
+  if (!(score > 0)) return false;
+  const scores = loadScores(mode);
+  if (scores.length < HIGH_SCORE_SLOTS) return true;
+  return score > scores[scores.length - 1].score;
+}
+
+/**
+ * Ends a run once the last life is gone. A qualifying score detours through
+ * the 'enterScore' initials picker (which submits and then falls through to
+ * 'gameOver'); anything else goes straight to 'gameOver'.
+ */
+function endRun(game) {
+  if (qualifiesForHighScore(game.mode, game.score)) {
+    game.initialsEntry = { slots: ['A', 'A', 'A'], index: 0 };
+    setPhase(game, 'enterScore');
+  } else {
+    game.initialsEntry = null;
+    setPhase(game, 'gameOver');
+  }
+}
+
+const LETTER_A = 'A'.charCodeAt(0);
+const ALPHABET_LEN = 26;
+
+/** Steps a slot letter by `dir`, wrapping A->Z and Z->A. */
+function cycleLetter(ch, dir) {
+  const i = ch.charCodeAt(0) - LETTER_A;
+  const next = ((i + dir) % ALPHABET_LEN + ALPHABET_LEN) % ALPHABET_LEN;
+  return String.fromCharCode(LETTER_A + next);
 }
 
 function updateCamera(game) {
@@ -219,9 +300,7 @@ function updateDrive(game, input, dt, invulnerable) {
   // killBuggy returns false when a shield absorbed the hit, in which case
   // the buggy is still alive and the run continues.
   if (cause && killBuggy(game, cause)) {
-    game.lives -= 1;
-    setPhase(game, 'dying');
-    resetCombo(game);
+    enterDying(game);
   }
 }
 
@@ -486,6 +565,23 @@ function startSelectedRun(game, seed) {
  *   seeded mulberry32 RNGs (game.rngSeed/game.waveRng), never this.
  */
 export function updateGame(game, input, dt, seed) {
+  // Hit-stop (Task 14). A kill sets game.freeze (0.03s for a regular enemy,
+  // 0.08s for a boss); until it drains, this whole function is a no-op apart
+  // from the countdown itself — no movement, no timers, no input, not even
+  // phaseTimer. Note the interaction with the fixed timestep: `dt` here is
+  // always DT (1/60), so a freeze consumes whole simulation TICKS, not wall
+  // time — 0.03 costs exactly 2 ticks and 0.08 exactly 5, identically on a
+  // 60Hz and a 144Hz display, and identically in `node --test`. Rendering
+  // continues at display rate through the freeze, so the particles thrown by
+  // the kill keep animating while the world holds still: that contrast is
+  // the whole point of the effect. Decrement-first (rather than
+  // check-then-decrement) means a freeze can never outlast its nominal
+  // duration by an extra tick.
+  if (game.freeze > 0) {
+    game.freeze = Math.max(0, game.freeze - dt);
+    return;
+  }
+
   game.phaseTimer += dt;
 
   switch (game.phase) {
@@ -534,9 +630,7 @@ export function updateGame(game, input, dt, seed) {
       // kill; this catches a kill that happened inside updateEnemies
       // (enemy shot, bomb, or chaser ram) this same frame.
       if (game.phase === 'playing' && !game.buggy.alive) {
-        game.lives -= 1;
-        setPhase(game, 'dying');
-        resetCombo(game);
+        enterDying(game);
       }
       // Combo updates LAST, after every award-generating system above has
       // run this frame — any comboAction detected here (new scoreEvents,
@@ -563,7 +657,10 @@ export function updateGame(game, input, dt, seed) {
       updateEnemies(game, dt);
       if (game.phaseTimer >= DYING_TIME) {
         if (game.lives <= 0) {
-          setPhase(game, 'gameOver');
+          // Task 14: a run that made the mode's top-10 detours through the
+          // 'enterScore' initials picker first; everything else lands on
+          // 'gameOver' directly, exactly as before.
+          endRun(game);
         } else {
           respawn(game);
           setPhase(game, 'respawning');
@@ -648,9 +745,7 @@ export function updateGame(game, input, dt, seed) {
       // cycle completes instead of doing it now.
       if (!game.buggy.alive) {
         if (bossJustDied) game.bossStageClearCheckpoint = game.checkpoint;
-        game.lives -= 1;
-        setPhase(game, 'dying');
-        resetCombo(game);
+        enterDying(game);
         break;
       }
 
@@ -673,9 +768,7 @@ export function updateGame(game, input, dt, seed) {
       // is unreachable in practice today, but it costs nothing to keep the
       // same shape as 'playing' in case that ever changes.
       if (game.phase === 'boss' && !game.buggy.alive) {
-        game.lives -= 1;
-        setPhase(game, 'dying');
-        resetCombo(game);
+        enterDying(game);
       }
 
       // Combo updates during a boss fight too — bosses should build the
@@ -689,6 +782,39 @@ export function updateGame(game, input, dt, seed) {
       // syncComboCursors() call already discards anything logged during it,
       // this frame's tail end included, once play resumes.
       if (game.phase === 'boss') updateCombo(game, dt);
+      break;
+    }
+
+    case 'enterScore': {
+      // Three-slot A-Z initials picker, arcade style. accel steps the active
+      // letter forward, brake steps it back (both wrap); jump AND fire both
+      // commit the slot and advance — on the third commit the entry is
+      // submitted to the mode's table and the phase falls through to
+      // 'gameOver', which now renders that table with this row highlighted.
+      //
+      // Only these four actions are read here. pause/mute/restart are
+      // deliberately NOT handled: mute is owned by main.js globally (a
+      // phase-independent audio toggle, correct to keep working here), and
+      // pause/restart have no per-phase behavior anywhere in this machine,
+      // so there is no side effect for a stray keypress to trigger while the
+      // player is picking letters.
+      const entry = game.initialsEntry;
+      if (!entry) { setPhase(game, 'gameOver'); break; } // defensive: never reachable via endRun
+
+      if (input.pressed('accel')) {
+        entry.slots[entry.index] = cycleLetter(entry.slots[entry.index], 1);
+      } else if (input.pressed('brake')) {
+        entry.slots[entry.index] = cycleLetter(entry.slots[entry.index], -1);
+      } else if (input.pressed('jump') || input.pressed('fire')) {
+        entry.index += 1;
+        if (entry.index >= INITIALS_LEN) {
+          const initials = entry.slots.join('');
+          submitScore(game.mode, initials, game.score);
+          game.lastInitials = initials;
+          game.initialsEntry = null;
+          setPhase(game, 'gameOver');
+        }
+      }
       break;
     }
 

@@ -4,7 +4,7 @@
 
 import { createInput } from './input.js';
 import { createGame, updateGame, DT, VIEW_W, VIEW_H } from './state.js';
-import { createRenderer, render } from './render.js';
+import { createRenderer, render, toggleCrt } from './render.js';
 import { createAudio } from './audio.js';
 import { notifyGameEventsCleared } from './combo.js';
 
@@ -45,6 +45,21 @@ function resizeCanvas() {
 
   screen.style.width = `${VIEW_W * scale}px`;
   screen.style.height = `${VIEW_H * scale}px`;
+
+  // The backing store tracks the displayed size (Task 14) instead of staying
+  // at 384x240. render.js blits the buffer up to it with smoothing off, which
+  // is pixel-identical to letting CSS do the scaling, but it gives the CRT
+  // overlay real screen rows to draw scanlines on — a 1px line every other
+  // row here reads as a scanline, whereas a 1px line in the 384x240 buffer
+  // would be magnified into a fat zebra stripe. Guarded so a same-size
+  // resize event does not needlessly clear the canvas (assigning width/height
+  // resets it) or force render.js to rebuild the cached overlay.
+  const bw = Math.max(1, Math.round(VIEW_W * scale));
+  const bh = Math.max(1, Math.round(VIEW_H * scale));
+  if (screen.width !== bw || screen.height !== bh) {
+    screen.width = bw;
+    screen.height = bh;
+  }
 }
 
 addEventListener('resize', resizeCanvas);
@@ -57,7 +72,9 @@ function loop(t) {
   const elapsed = Math.min((t - last) / 1000, 0.25); // clamp to avoid spiral of death
   last = t;
   acc += elapsed;
+  let steps = 0;
   while (acc >= DT) {
+    steps++;
     // The 4th argument is the ONLY place Date.now()-derived entropy is
     // allowed to reach state.js — it stays a pure, Node-testable module
     // that never calls Date.now()/Math.random() itself (see updateGame's
@@ -75,10 +92,20 @@ function loop(t) {
     // most one of those steps has `pressed('mute')` true, so a single key
     // press toggles exactly once.
     if (input.pressed('mute')) audio.toggleMuted();
+    // CRT overlay toggle (C). Read inside the fixed-timestep loop for exactly
+    // the same reason as mute above: input.pressed() is "just pressed this
+    // sim step" and is aged away by endFrame(), so a check outside this loop
+    // would both miss and double-fire. render.js owns the flag and persists
+    // it to localStorage ('lunar-rover-crt', default ON).
+    if (input.pressed('crt')) toggleCrt(renderer);
     input.endFrame();
     acc -= DT;
   }
-  render(renderer, game, acc / DT);
+  // 4th argument: the simulation time this frame actually advanced. render.js
+  // ages particles and screen shake by it instead of assuming one fixed step
+  // per rendered frame, which would otherwise make both run fast on a
+  // high-refresh display and slow on a low-refresh one.
+  render(renderer, game, acc / DT, steps * DT);
   // Audio consumes this frame's events after render (render itself doesn't
   // read game.events) but before the single clear point below.
   audio.processEvents(game.events, game);

@@ -17,6 +17,7 @@ import {
 import { featuresInRange, addBombCrater } from './terrain.js';
 import { award } from './score.js';
 import { spawnCapsule } from './powerups.js';
+import { pushFx } from './particles.js';
 
 // --- tunables --------------------------------------------------------------
 
@@ -322,6 +323,9 @@ function resolveBombImpacts(game) {
     if (s.kind === 'bomb' && s.y >= GROUND_Y) {
       addBombCrater(game.terrain, s.x);
       game.events.push('bombHit');
+      // Visual twin of the 'bombHit' audio event: game.events carries no
+      // positions, so render.js gets the impact point through game.fx.
+      pushFx(game, 'bombHit', s.x, GROUND_Y);
     } else {
       kept.push(s);
     }
@@ -443,6 +447,18 @@ export function hitEnemy(game, enemy) {
 
   game.enemies = game.enemies.filter((e) => e !== enemy);
   game.events.push('explosion');
+  // Visual channel (see particles.js): the explosion burst needs the kill
+  // position, which the string event cannot carry. Centered on the enemy's
+  // collision footprint rather than its top-left origin.
+  pushFx(
+    game, 'boom',
+    enemy.x + (ENEMY_W[enemy.kind] ?? 16) / 2,
+    enemy.y + (ENEMY_H[enemy.kind] ?? 10) / 2,
+  );
+  // Hit-stop (Task 14): a kill freezes the whole simulation for 0.03s so the
+  // explosion lands with weight. See updateGame's freeze handling in
+  // state.js — this is consumed as whole fixed ticks, not wall time.
+  game.freeze = 0.03;
 
   switch (enemy.kind) {
     case 'swooper':
