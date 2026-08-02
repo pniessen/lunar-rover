@@ -47,10 +47,21 @@ function muzzleY(game) {
   return GROUND_Y + game.buggy.y - MUZZLE_Y_OFFSET;
 }
 
+// Phases in which the guns actually fire. 'respawning' is included because
+// blinking-in after a respawn is still a playable, shootable state.
+//
+// 'boss' was MISSING until the final-review fix wave, and it was the other
+// half of finding C1: state.js's 'boss' case has always called fireDual on a
+// fire press, but this guard silently swallowed it, so the player could not
+// put a single shot in the air for the entire fight. It went unnoticed because
+// every boss-hit test hand-placed shots into game.playerShots instead of
+// firing them (finding C2). Both halves are covered now by the reachability
+// tests in tests/boss.test.js, which fire only through the real input path.
+const FIRE_PHASES = new Set(['playing', 'respawning', 'boss']);
+
 /**
  * Fires the forward cannon and the vertical gun in one press, each subject
- * to its own on-screen limit. Only fires while 'playing' or 'respawning'
- * (blinking-in after a respawn is still a playable, shootable state).
+ * to its own on-screen limit. Only fires in FIRE_PHASES.
  *
  * Vertical-gun capacity rule under the spread power-up: a press fires its
  * full 3-pellet fan only if doing so would not exceed the 4-shot up limit
@@ -61,7 +72,7 @@ function muzzleY(game) {
  * capacity for the fan remains," rather than firing a partial fan.
  */
 export function fireDual(game) {
-  if (game.phase !== 'playing' && game.phase !== 'respawning') return;
+  if (!FIRE_PHASES.has(game.phase)) return;
 
   const b = game.buggy;
   const rapid = game.powerup?.type === 'rapid';
@@ -95,10 +106,28 @@ export function fireDual(game) {
   if (fired) game.events.push('fire');
 }
 
+/**
+ * Every player shot carries the buggy's forward motion (game.speed) on top of
+ * its own vx, forward and vertical alike.
+ *
+ * For the forward cannon that has always been true (muzzle velocity adds to
+ * the vehicle's). For the vertical gun it is the FINAL-REVIEW C1 fix: up-shots
+ * used to have no forward carry at all, so they hung at the world column they
+ * were fired from and visibly slid backwards across the screen while climbing.
+ * The arcade original fires straight *up the screen*, and — more importantly —
+ * a shot that drifts backwards can never catch anything ahead of the buggy: the
+ * boss (and every flyer) outruns its own killer by exactly game.speed. With the
+ * carry applied, an up-shot holds its screen column for its whole climb, so
+ * "line the target up over the buggy and shoot" is a strategy that works.
+ *
+ * Note this is applied at MOVE time, not baked into the shot's vx at fire time:
+ * s.vx stays the pure gun-relative velocity (0, or the spread fan's ±60), which
+ * keeps the shot records meaningful and every hand-built shot in the test suite
+ * behaving exactly as written.
+ */
 function moveShots(game, dt) {
   for (const s of game.playerShots) {
-    const speedBoost = s.dir === 'fwd' ? game.speed : 0;
-    s.x += (s.vx + speedBoost) * dt;
+    s.x += (s.vx + game.speed) * dt;
     s.y += s.vy * dt;
   }
 }

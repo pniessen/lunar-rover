@@ -29,6 +29,15 @@ const CAPSULE_H = 10;
 const FALL_SPEED = 20;       // px/s, matches the documented `vy:20`
 const GROUNDED_LIFETIME = 8; // seconds a grounded, uncollected capsule survives
 
+// The boss's guaranteed drop falls far faster than a regular capsule (finding
+// I4): a 20px/s drift from the mothership's hover altitude would take ~6
+// seconds to reach the ground, by which time the buggy is ~1200px past it.
+const BOSS_DROP_VY = 120;
+
+// Phases in which a capsule the buggy is overlapping is actually picked up —
+// every phase where the buggy is on the ground and moving. See updatePowerups.
+const COLLECT_PHASES = new Set(['playing', 'respawning', 'boss', 'stageClear']);
+
 /**
  * spawnCapsule(game, x, y, type?) — pushes a new falling capsule onto
  * game.capsules. `type` is optional; when omitted it is picked uniformly
@@ -36,11 +45,32 @@ const GROUNDED_LIFETIME = 8; // seconds a grounded, uncollected capsule survives
  * this module). Passing an explicit type lets callers (e.g. the Task 12
  * boss drop) force a specific power-up instead of relying on chance.
  */
-export function spawnCapsule(game, x, y, type) {
+export function spawnCapsule(game, x, y, type, vy = FALL_SPEED) {
   const resolvedType = type ?? TYPES[Math.floor(game.waveRng() * TYPES.length)];
   game.capsules.push({
-    x, y, vy: FALL_SPEED, type: resolvedType, grounded: false, groundedTime: 0,
+    x, y, vy, type: resolvedType, grounded: false, groundedTime: 0,
   });
+}
+
+/**
+ * spawnBossCapsule(game, y) — the mothership's guaranteed drop (finding I4).
+ *
+ * A boss can die anywhere in its sweep, including *behind* the buggy, and it
+ * dies high up. Dropping the capsule at the boss's own position therefore
+ * produced a pod that was unreachable by construction: it drifted down at
+ * 20px/s for six seconds while the buggy drove ~1200px away from it, then
+ * expired uncollected. Instead the pod is ejected forward, on a fast fall,
+ * with the lead computed so it touches down exactly where the buggy will be:
+ * lead = speed * fallTime. The buggy keeps scrolling through the whole
+ * bossDown -> stageClear tally (and updatePowerups now runs, and collects,
+ * during 'boss'/'stageClear' — see below), so it drives straight into it;
+ * GROUNDED_LIFETIME then leaves 8 more seconds of slack if the tally's timing
+ * or a mid-fight death shifts things.
+ */
+export function spawnBossCapsule(game, y, type) {
+  const fallTime = Math.max(0, (GROUND_Y - CAPSULE_H - y)) / BOSS_DROP_VY;
+  const lead = Math.max(80, game.speed * fallTime);
+  spawnCapsule(game, game.buggy.worldX + lead, y, type, BOSS_DROP_VY);
 }
 
 /** True if `game.buggy`'s current body box overlaps the capsule's box. */
@@ -80,21 +110,29 @@ export function applyPowerup(game, type) {
  * expire-or-collect) and ticks the active power-up's countdown.
  *
  * Capsule movement/grounding/expiry runs unconditionally whenever this is
- * called; collection is additionally gated to 'playing'/'respawning' (a
- * capsule collected mid-death or mid-intermission would be a confusing
- * freebie). The active power-up's remaining-time countdown only ticks
- * during 'playing' — this function is never even called during 'boss' (see
- * below), so a boss fight simply can't tick it either — and matches the
- * shield's existing "duration" of Infinity: it can only ever end by being
- * consumed in killBuggy, never by a clock.
+ * called; collection is additionally gated to the phases where the player is
+ * actually driving the buggy: 'playing', 'respawning', 'boss' and
+ * 'stageClear'.
  *
- * state.js is expected to call this during 'playing' (full behavior) and
- * 'respawning' (movement + collection, no tick — player-friendly, matches
- * fireDual/updateWeapons already running during respawning). It is *not*
- * called during 'dying'/'stageClear'/'boss': capsules simply pause falling
- * for those few frames, which is an acceptable, documented simplification
- * rather than a hazard (nothing depends on capsules moving during a scripted
- * intermission or an explosion hold).
+ * 'boss'/'stageClear' were added by finding I4. The boss's guaranteed drop
+ * lands during exactly those two phases, so with them excluded the pod froze
+ * mid-air through the whole ~2.5s tally, ended up hundreds of px behind the
+ * buggy, and expired — the "guaranteed" reward was unobtainable. During
+ * 'stageClear' the buggy is on rails (NOOP_INPUT) but still scrolling
+ * forward, so driving into the pod is exactly what happens; letting it be
+ * picked up there is the whole point of the fix, not a freebie.
+ *
+ * The active power-up's remaining-time countdown still only ticks during
+ * 'playing'. That is deliberate: a rapid/spread timer does not burn down
+ * while the run is on rails (stageClear), blinking in (respawning) or —
+ * player-friendly, and matching how the boss arena is a scripted set-piece —
+ * during a boss fight. It also matches the shield's "duration" of Infinity:
+ * a shield only ever ends by being consumed in killBuggy, never by a clock.
+ *
+ * state.js calls this during 'playing' (full behavior), 'respawning', 'boss'
+ * and 'stageClear' (movement + collection, no tick). It is still *not* called
+ * during 'dying': capsules simply pause for the explosion hold, an acceptable
+ * documented simplification.
  */
 export function updatePowerups(game, dt) {
   // Tick the power-up that was already active *before* this frame's capsule
@@ -108,7 +146,7 @@ export function updatePowerups(game, dt) {
     }
   }
 
-  const collectionAllowed = game.phase === 'playing' || game.phase === 'respawning';
+  const collectionAllowed = COLLECT_PHASES.has(game.phase);
   const groundY = GROUND_Y - CAPSULE_H;
   const kept = [];
 

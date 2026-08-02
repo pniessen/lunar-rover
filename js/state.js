@@ -759,6 +759,11 @@ export function updateGame(game, input, dt, seed) {
       // the phase only exits once BOTH the tally is fully paid AND
       // STAGE_CLEAR_TIME has elapsed.
       updateBuggy(game, NOOP_INPUT, dt);
+      // Capsules keep falling and can still be collected while the tally runs
+      // (finding I4): the buggy is on rails but still scrolling forward, and
+      // the boss's guaranteed drop is deliberately aimed at the patch of
+      // ground it rolls over during this intermission.
+      updatePowerups(game, dt);
       tickStageClearTally(game);
       if (game.stageClear.paid >= game.stageClear.total && game.phaseTimer >= STAGE_CLEAR_TIME) {
         finishStageClear(game);
@@ -766,6 +771,20 @@ export function updateGame(game, input, dt, seed) {
       break;
 
     case 'boss': {
+      // Defensive exit (final-review finding I3). Every in-phase path that
+      // nulls game.boss also transitions out of 'boss' in the same call, so
+      // reaching a frame here with no boss should be impossible — but if it
+      // ever happened (a future bug, a hand-built game object, a save/replay
+      // path) the phase would sit forever with no boss to kill and no exit
+      // condition: an unrecoverable soft-lock in the middle of a run. Fall
+      // through to the tally the fight would have paid instead. game.checkpoint
+      // is the break index in classic and simply the last checkpoint crossed in
+      // endless, which is exactly what enterStageClear wants in both modes.
+      if (!game.boss) {
+        enterStageClear(game, game.checkpoint);
+        break;
+      }
+
       // Stage-break mothership fight (Task 12). The buggy drives/jumps/
       // fires exactly as in 'playing' — spawnDirector is the only system
       // withheld (no regular enemy waves during a boss fight); terrain
@@ -844,6 +863,12 @@ export function updateGame(game, input, dt, seed) {
 
       if (input.pressed('fire')) fireDual(game);
       updateWeapons(game, dt);
+      // Capsules move and can be collected during a boss fight (finding I4).
+      // The boss's own guaranteed drop lands during 'boss'/'stageClear', so
+      // without this it froze mid-air for the whole fight-end sequence and
+      // expired behind the buggy. The active power-up's countdown still does
+      // not tick here — see updatePowerups' docstring.
+      updatePowerups(game, dt);
 
       // Defensive mirror of 'playing': updateWeapons never actually kills
       // the buggy (player shots only ever hit terrain/the boss), so this

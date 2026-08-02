@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { startBoss, updateBoss, hitBoss } from '../js/boss.js';
+import { startBoss, updateBoss, hitBoss, bossBox } from '../js/boss.js';
 import { createGame, updateGame, DT } from '../js/state.js';
+import { spawnCapsule } from '../js/powerups.js';
 import { clearZone, featuresInRange, STAGE_BREAKS, checkpointX } from '../js/terrain.js';
 
 const noInput = {
@@ -410,4 +411,300 @@ test('crossing a stage break clears stale wave enemies and enemy shots out of th
   assert.equal(g.phase, 'boss');
   assert.deepEqual(g.enemies, [], 'stale wave enemies do not survive into the boss arena');
   assert.deepEqual(g.enemyShots, [], 'stale enemy shots do not survive into the boss arena');
+});
+
+// --- FINAL REVIEW: real reachability (findings C1 / C2) --------------------
+//
+// The tests above prove the collision FUNCTION works; they proved nothing
+// about whether a player can ever put a shot inside that box, because every
+// one of them hand-places shots into game.playerShots. The final review found
+// that they could not: the boss was pinned 200px ahead of the buggy, up-shots
+// had no forward carry (so they fell behind their own target forever),
+// forward shots fly at y≈190 against a box at y 70..90 — and, underneath all
+// of that, fireDual refused to fire at all while game.phase === 'boss'.
+//
+// The tests below are the gate for that class of bug. They never touch
+// game.playerShots: a bot drives a real game into a real boss fight and
+// presses 'fire' through updateGame, exactly as a player would.
+
+// A "competent player" model: holds a cruise band, taps fire on a fixed
+// cooldown, and jumps hazards — checking not just what it is jumping OVER but
+// where it will LAND, which is the actual skill the bomb carpet asks for. It
+// is a probe for shot REACHABILITY, not a demonstration of optimal play; it
+// still loses the occasional life to a carpet, so these runs get a little
+// life headroom (deaths only slow a fight down, they never make an
+// unreachable boss reachable).
+function playerBot(g, fireEvery = 15) {
+  let frame = -1;
+  return {
+    tick() { frame++; },
+    state: {},
+    pressed(n) {
+      if (n === 'fire') return frame % fireEvery === 0;
+      if (n !== 'jump') return false;
+      const b = g.buggy;
+      if (b.airborne || b.settle > 0) return false;
+      const mid = b.worldX + 16;
+      const reach = g.speed * 1.0; // airtime is 2*|JUMP_VY|/GRAVITY == 1.0s
+      const feats = (g.terrain.mode === 'test'
+        ? g.terrain.features
+        : featuresInRange(g.terrain, mid, mid + reach + 120))
+        .filter((f) => !f.destroyed && f.x + f.w > mid + 6)
+        .sort((a, c) => a.x - c.x);
+      if (!feats.length) return false;
+      const d = feats[0].x - mid;
+      if (d < 4 || d > 40) return false;
+      let end = feats[0].x + feats[0].w;
+      for (const f of feats.slice(1)) {
+        if (f.x - end > 34) break; // a gap the buggy can actually sit in
+        end = f.x + f.w;
+      }
+      const land = mid + reach;
+      const landBlocked = feats.some((f) => f.x - 20 < land && f.x + f.w + 20 > land);
+      if (!landBlocked && end - mid + 12 < reach) return true;
+      return d < 10; // out of road: jump anyway rather than drive in
+    },
+    endFrame() {},
+  };
+}
+
+/** Drives a fresh classic run across `stage`'s break line and into the fight. */
+function enterFightAt(stage, seed = 7) {
+  const g = createGame('classic', seed);
+  g.phase = 'playing';
+  g.stage = stage;
+  g.lives = 6; // headroom for the bot's occasional carpet death
+  g.buggy.worldX = checkpointX(STAGE_BREAKS[stage]) - 1;
+  step(g); // crosses the break line -> 'boss'
+  assert.equal(g.phase, 'boss');
+  return g;
+}
+
+/**
+ * Runs `g` for at most `seconds` of simulated time with the bot at the
+ * controls, returning when the boss dies. Every shot in the fight is fired by
+ * the bot pressing 'fire' through updateGame — nothing is hand-placed.
+ */
+function fightWithBot(g, seconds = 60, fireEvery = 15) {
+  const input = playerBot(g, fireEvery);
+  assert.equal(g.phase, 'boss', 'the run is in the fight');
+  const startHp = g.boss.hp;
+  let hits = 0;
+  let prevHp = startHp;
+  let frames = 0;
+  const maxFrames = Math.round(seconds / DT);
+  while (g.boss && frames < maxFrames) {
+    input.tick(g);
+    updateGame(g, input, DT);
+    frames++;
+    if (g.boss && g.boss.hp < prevHp) {
+      hits += prevHp - g.boss.hp;
+      prevHp = g.boss.hp;
+    }
+  }
+  if (!g.boss) hits += prevHp; // the killing blow(s) took the last hp
+  return { hits, startHp, seconds: frames * DT, killed: !g.boss };
+}
+
+test('REACHABILITY: a stage-0 boss can be shot down by a player firing through the real input path', () => {
+  const g = enterFightAt(0);
+  assert.equal(g.boss.maxHp, 12);
+  const r = fightWithBot(g, 60);
+
+  assert.ok(r.hits > 1, `the boss takes repeated hits (got ${r.hits})`);
+  assert.equal(r.hits, 12, 'every point of the 12hp bar was taken off by a fired shot');
+  assert.ok(r.killed, `the boss reaches 0hp within 60s (took ${r.seconds.toFixed(1)}s)`);
+  assert.ok(r.seconds < 60, 'and well inside the review\'s 30-60s balance guardrail');
+  assert.equal(g.boss, null);
+  // The fight resolves into the normal stage-clear flow, not a soft-lock.
+  assert.ok(g.phase === 'stageClear' || g.phase === 'dying',
+    `resolved into the post-fight flow, got ${g.phase}`);
+});
+
+test('REACHABILITY: the final boss stays killable in phase 2 (faster patterns, dives unlocked)', () => {
+  const g = enterFightAt(4);
+  assert.equal(g.boss.maxHp, 40);
+  assert.equal(g.boss.isFinal, true);
+  // Start the clock at the phase-2 threshold so this measures the phase-2
+  // fight specifically: 0.7x hover/telegraph timings and diveSweep in the
+  // rotation, which is when the boss is at its most mobile.
+  g.boss.hp = 20;
+  g.boss.phase2 = true;
+
+  const r = fightWithBot(g, 60);
+  assert.ok(r.hits > 1, `the phase-2 boss takes repeated hits (got ${r.hits})`);
+  assert.equal(r.hits, 20);
+  assert.ok(r.killed, `phase 2 reaches 0hp within 60s (took ${r.seconds.toFixed(1)}s)`);
+  assert.equal(g.boss, null);
+});
+
+test('REACHABILITY: fireDual actually fires during a boss fight (it silently no-opped before)', () => {
+  const g = enterFightAt(0);
+  assert.equal(g.phase, 'boss');
+  assert.equal(g.playerShots.length, 0);
+  step(g, press('fire'));
+  assert.ok(g.playerShots.some((s) => s.dir === 'up'), 'the up gun fires during a boss fight');
+  assert.ok(g.playerShots.some((s) => s.dir === 'fwd'), 'the forward cannon fires too');
+});
+
+test('an up-shot holds its column relative to the buggy for its whole climb', () => {
+  const g = createGame('classic', 1);
+  g.phase = 'playing';
+  g.terrain = { mode: 'test', features: [] };
+  step(g, press('fire'));
+  const up = g.playerShots.find((s) => s.dir === 'up');
+  const offset0 = up.x - g.buggy.worldX;
+  // Climb it up to roughly the boss's hover altitude.
+  for (let i = 0; i < 30; i++) step(g);
+  const offset1 = up.x - g.buggy.worldX;
+  assert.ok(up.y < 120, 'the shot climbed toward boss altitude');
+  assert.ok(Math.abs(offset1 - offset0) < 2,
+    `the shot keeps its column (was +${offset0.toFixed(1)}, now +${offset1.toFixed(1)}) — `
+    + 'without the forward carry it slides ~100px behind the buggy over this climb');
+});
+
+// --- FINDING I7: hitbox vs sprite ------------------------------------------
+
+test('the boss hitbox matches the drawn 48x15 sprite plus a symmetric pad', () => {
+  const g = createGame('classic', 1);
+  g.stage = 0;
+  startBoss(g);
+  const b = g.boss;
+  const box = bossBox(b);
+  // Centered on the sprite: equal overhang on both sides, both axes.
+  assert.equal(b.x - box.x0, box.x1 - (b.x + 48), 'x pad is symmetric about the 48px sprite');
+  assert.equal(b.y - box.y0, box.y1 - (b.y + 15), 'y pad is symmetric about the 15px sprite');
+  // And it covers the whole sprite (the old 32x20 box left the sprite's right
+  // third unhittable while claiming 5px of empty air below it).
+  assert.ok(box.x0 <= b.x && box.x1 >= b.x + 48, 'the full sprite width is hittable');
+  assert.ok(box.y0 <= b.y && box.y1 >= b.y + 15, 'the full sprite height is hittable');
+  assert.ok(box.x1 - box.x0 <= 48 + 8 && box.y1 - box.y0 <= 15 + 8, 'the pad stays modest');
+});
+
+// --- dive geometry ----------------------------------------------------------
+
+test('a dive drops low enough for a ground-level forward shot to connect', () => {
+  const g = createGame('classic', 1);
+  g.stage = 2;
+  startBoss(g);
+  g.playerShots = [];
+
+  let lowest = -Infinity; // lowest on screen == largest y
+  let sawDive = false;
+  for (let i = 0; i < 3000; i++) {
+    updateBoss(g, DT);
+    if (g.boss.pattern === 'diveSweep') {
+      sawDive = true;
+      lowest = Math.max(lowest, g.boss.y);
+    }
+  }
+  assert.ok(sawDive);
+  // The forward cannon's muzzle line is GROUND_Y + buggy.y - 10 == 190 on the
+  // ground; a 2px-tall shot there occupies y 190..192.
+  const box = bossBox({ x: 0, y: lowest });
+  assert.ok(box.y0 < 192 && box.y1 > 190,
+    `at the bottom of its dive (y=${lowest}) the boss box ${box.y0}..${box.y1} must bracket the muzzle line`);
+});
+
+test('a dive never begins on top of the buggy', () => {
+  const g = createGame('classic', 1);
+  g.stage = 2;
+  startBoss(g);
+  g.playerShots = [];
+
+  let sawDive = false;
+  for (let i = 0; i < 6000; i++) {
+    updateBoss(g, DT);
+    if (g.boss.pattern !== 'diveSweep') continue;
+    sawDive = true;
+    const offset = g.boss.x - g.buggy.worldX;
+    assert.ok(offset >= 32,
+      `the mothership must stay clear of the buggy's 32px body while at strike height (offset ${offset.toFixed(1)})`);
+  }
+  assert.ok(sawDive);
+});
+
+test('the horizontal sweep is deterministic and sweeps past the buggy every cycle', () => {
+  const run = () => {
+    const g = createGame('classic', 1);
+    g.stage = 0;
+    startBoss(g);
+    const offsets = [];
+    for (let i = 0; i < 600; i++) {
+      updateBoss(g, DT);
+      offsets.push(+(g.boss.x - g.buggy.worldX).toFixed(6));
+    }
+    return offsets;
+  };
+  const a = run();
+  const b = run();
+  assert.deepEqual(a, b, 'no RNG anywhere in the fight geometry');
+  assert.ok(Math.min(...a) < 0, 'the sweep carries the boss back over/behind the buggy');
+  assert.ok(Math.max(...a) > 150, 'and back out ahead of it');
+  // On screen throughout: the buggy sits at ~56-110px, the viewport is 384px.
+  assert.ok(Math.min(...a) > -80 && Math.max(...a) < 250, 'the sweep stays on screen');
+});
+
+// --- FINDING I3: defensive exit when the boss is missing --------------------
+
+test('a null boss at the start of a boss frame exits to stageClear instead of soft-locking', () => {
+  const g = createGame('classic', 1);
+  g.phase = 'playing';
+  g.terrain = { mode: 'test', features: [] };
+  g.buggy.worldX = checkpointX(STAGE_BREAKS[0]) - 1;
+  step(g);
+  assert.equal(g.phase, 'boss');
+
+  // Simulate the impossible-today state the guard exists for.
+  g.boss = null;
+  step(g);
+  assert.equal(g.phase, 'stageClear', 'the phase resolves rather than hanging with nothing to kill');
+  assert.ok(g.stageClear);
+});
+
+// --- FINDING I4: the boss's guaranteed capsule is actually collectable ------
+
+test('the boss drop lands on the buggy path and is collected during the stage-clear tally', () => {
+  const g = createGame('classic', 1);
+  g.phase = 'playing';
+  g.terrain = { mode: 'test', features: [] };
+  g.buggy.worldX = checkpointX(STAGE_BREAKS[0]) - 1;
+  step(g);
+  assert.equal(g.phase, 'boss');
+
+  g.boss.hp = 1;
+  g.playerShots = [{ x: g.boss.x + 10, y: g.boss.y + 5, vx: 300, vy: 0, dir: 'fwd' }];
+  step(g);
+  assert.equal(g.boss, null);
+  assert.equal(g.capsules.length, 1, 'the guaranteed drop exists');
+  const capsule = g.capsules[0];
+  assert.ok(capsule.x > g.buggy.worldX,
+    'and it is ejected AHEAD of the buggy, not left behind at the wreck');
+
+  // Run the tally out. The capsule must be picked up somewhere in the
+  // stageClear -> playing window rather than expiring behind the buggy.
+  let n = 0;
+  while (g.powerup == null && n < 1200) { step(g); n++; }
+  assert.ok(g.powerup, `the capsule was collected (phase ${g.phase} after ${(n * DT).toFixed(1)}s)`);
+  assert.ok(g.events.includes('powerup'));
+  assert.equal(g.capsules.length, 0);
+});
+
+test('capsules move and can be collected during a boss fight', () => {
+  const g = createGame('classic', 1);
+  g.phase = 'playing';
+  g.terrain = { mode: 'test', features: [] };
+  g.buggy.worldX = checkpointX(STAGE_BREAKS[0]) - 1;
+  step(g);
+  assert.equal(g.phase, 'boss');
+
+  spawnCapsule(g, g.buggy.worldX + 40, 120, 'rapid');
+  const y0 = g.capsules[0].y;
+  step(g);
+  assert.ok(g.capsules.length === 0 || g.capsules[0].y > y0,
+    'capsules no longer freeze in mid-air for the whole fight');
+
+  let n = 0;
+  while (g.powerup == null && n < 600) { step(g); n++; }
+  assert.equal(g.powerup?.type, 'rapid', 'and the buggy can drive into one mid-fight');
 });
