@@ -205,20 +205,35 @@ export function drawHUD(ctx, game, sprites) {
   const hi = scores.length ? scores[0].score : 0;
   drawText(ctx, 100, 2, `HI ${String(hi).padStart(6, '0')}`, '#7fd8ff');
 
-  // Stage timer M:SS
-  const secs = Math.max(0, Math.floor(game.stageTime));
+  const isEndless = game.mode === 'endless';
+
+  // Stage timer M:SS — classic: the current stage's clock (game.stageTime,
+  // reset on every stageClear); endless has no stages to reset the clock
+  // between, so this slot is repurposed to the whole run's elapsed time
+  // (game.elapsedTotal) instead of being hidden outright.
+  const secs = Math.max(0, Math.floor(isEndless ? (game.elapsedTotal || 0) : game.stageTime));
   const timerStr = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
   drawText(ctx, 170, 2, timerStr, '#ffffff');
 
   drawWarningLights(ctx, game, 213, 2);
 
-  // Checkpoint letter, large (2x)
-  const letter = LETTERS[game.checkpoint] || 'A';
-  drawText(ctx, 255, 1, letter, '#ffe060', 2);
+  if (isEndless) {
+    // Distance counter (meters = worldX/10) replaces the checkpoint letter —
+    // endless has no checkpoints (state.js gates the STAGE_BREAKS/
+    // checkpoint-letter machinery to mode==='classic').
+    const meters = Math.floor(game.buggy.worldX / 10);
+    drawText(ctx, 246, 2, `${String(meters).padStart(4, '0')}M`, '#ffe060', 1);
+  } else {
+    // Checkpoint letter, large (2x)
+    const letter = LETTERS[game.checkpoint] || 'A';
+    drawText(ctx, 255, 1, letter, '#ffe060', 2);
+  }
 
   drawPowerup(ctx, game, 278, 1);
 
   drawLives(ctx, sprites, game, 306, 3);
 
-  drawProgressBar(ctx, game);
+  // The A-Z progress bar is a classic-only concept (it's keyed to
+  // LETTERS/STAGE_BREAKS, which endless never advances through).
+  if (!isEndless) drawProgressBar(ctx, game);
 }

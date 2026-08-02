@@ -7,6 +7,7 @@ import { featuresInRange } from './terrain.js';
 import { buggyScreenX, DT, DYING_TIME, VIEW_W, VIEW_H, GROUND_Y, HUD_H } from './state.js';
 import { mulberry32 } from './rng.js';
 import { drawText, textWidth, drawHUD } from './hud.js';
+import { loadScores } from './score.js';
 
 const STAR_WORLD_W = 2048; // starfield wrap width, in starfield-local px
 const STAR_COUNT = 110;
@@ -289,8 +290,31 @@ function drawOverlays(r, game, screenX, by) {
     centerText(ctx, 'LUNAR ROVER', 83, '#3a0f26', 3);
     centerText(ctx, 'LUNAR ROVER', 81, '#ff8fc8', 3);
     centerText(ctx, 'RETRO-MOD', 110, '#7fd8ff', 1);
-    if (Math.floor(game.phaseTimer * 2) % 2 === 0) {
-      centerText(ctx, 'PRESS ANY KEY', 140, '#ffffff', 1);
+
+    // Mode-select menu (Task 13): accel/brake toggle game.menuIndex between
+    // CLASSIC (0) and ENDLESS (1) — see state.js's 'attract' case; jump/fire
+    // starts whichever is highlighted. 'CLASSIC' and 'ENDLESS' are both 7
+    // characters, so they share one centered x — only the row's color and a
+    // blinking marker square to its left change with the selection.
+    const classicSel = game.menuIndex === 0;
+    const optW = textWidth('CLASSIC', 1);
+    const optX = (VIEW_W - optW) / 2;
+    drawText(ctx, optX, 126, 'CLASSIC', classicSel ? '#ffe060' : '#ffffff', 1);
+    drawText(ctx, optX, 138, 'ENDLESS', classicSel ? '#ffffff' : '#ffe060', 1);
+
+    const blink = Math.floor(game.phaseTimer * 2) % 2 === 0;
+    if (blink) {
+      ctx.fillStyle = '#ffe060';
+      ctx.fillRect(optX - 10, (classicSel ? 126 : 138) + 1, 4, 4);
+    }
+
+    // Top score of the currently-highlighted mode's table.
+    const scores = loadScores(classicSel ? 'classic' : 'endless');
+    const hi = scores.length ? scores[0].score : 0;
+    centerText(ctx, `HI ${String(hi).padStart(6, '0')}`, 155, '#7fd8ff', 1);
+
+    if (blink) {
+      centerText(ctx, 'PRESS FIRE', 175, '#ffffff', 1);
     }
     return;
   }

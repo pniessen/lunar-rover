@@ -42,7 +42,12 @@ export function updateBuggy(game, input, dt) {
 
   // game.speed is the single source of truth for scroll speed; it eases
   // toward the current band's target at ACCEL px/s^2 rather than snapping.
-  const target = SPEED_BANDS[b.band];
+  // game.speedBonus (Task 13, endless-only difficulty ramp — see state.js's
+  // tickEndlessClock) adds a flat px/s on top of the band target; it's 0
+  // for classic (never mutated there) and for any game object predating
+  // this field, so this stays backward compatible. SPEED_BANDS itself is
+  // never mutated — only the per-frame target computed from it here.
+  const target = SPEED_BANDS[b.band] + (game.speedBonus || 0);
   const maxStep = ACCEL * dt;
   const diff = target - game.speed;
   game.speed += Math.abs(diff) <= maxStep ? diff : Math.sign(diff) * maxStep;

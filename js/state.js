@@ -9,6 +9,7 @@ import {
 import {
   buildClassicCourse, createEndlessTerrain, ensureGenerated,
   checkpointIndexAt, checkpointX, featuresInRange, clearZone, STAGE_BREAKS,
+  CHECKPOINT_SPACING,
 } from './terrain.js';
 import { fireDual, updateWeapons } from './weapons.js';
 import { spawnDirector, updateEnemies } from './enemies.js';
@@ -60,9 +61,6 @@ const CRATER_TYPES = new Set(['crater', 'bigCrater', 'bombCrater', 'doubleCrater
 
 const GENERATE_AHEAD = 2400;       // endless terrain lookahead, px
 
-// Every input action; any of them wakes the attract screen.
-const ACTIONS = ['accel', 'brake', 'jump', 'fire', 'pause', 'mute', 'restart'];
-
 /**
  * Screen x the buggy is pinned to. It drifts right as speed rises so the
  * player gets more lookahead the faster they go (SPEED_BANDS[0] -> 56 px,
@@ -93,6 +91,21 @@ export function createGame(mode = 'classic', seed = 1) {
     jumpStartX: null,
     extraLivesGranted: [],
     stageClear: null,
+    // Attract-screen mode selector (Task 13): 0 = CLASSIC, 1 = ENDLESS.
+    // accel/brake toggle it while game.phase==='attract'; jump/fire starts
+    // whichever is highlighted. Reset to 0 by every fresh createGame() —
+    // in particular, gameOver's resetToAttract() always lands back on
+    // CLASSIC rather than remembering the previous run's selection.
+    menuIndex: 0,
+    // Endless-only run clock (Task 13): accumulates dt across the whole
+    // run (only while 'playing'/'boss', mirroring stageTime — see
+    // tickEndlessClock below), and drives both the speed ramp
+    // (game.speedBonus) and the boss cadence (game.nextBossAt). Always
+    // present (harmless 0/90 defaults) so the shape is consistent across
+    // modes, but only ever mutated when game.mode === 'endless'.
+    elapsedTotal: 0,
+    speedBonus: 0,
+    nextBossAt: 90,
     // Set only in the rare same-frame race where a boss dies in the exact
     // frame the buggy also dies (see the 'boss' case's buggy-death-takes-
     // priority handling and resumeAfterRespawn below) — stashes the
@@ -124,10 +137,6 @@ function setPhase(game, phase) {
 
 function updateCamera(game) {
   game.camX = game.buggy.worldX - buggyScreenX(game);
-}
-
-function anyPressed(input) {
-  return ACTIONS.some((a) => input.pressed(a));
 }
 
 /**
@@ -187,12 +196,19 @@ function updateDrive(game, input, dt, invulnerable) {
   }
 
   // Checkpoints are monotonic — never regress after a respawn drives the
-  // buggy backwards.
+  // buggy backwards. Tracked in both modes (endless respawn math wants a
+  // recent boundary — see respawn() below — and the HUD/audio checkpoint
+  // chime is harmless either way), but the stage-break -> boss diversion
+  // below is classic-only: endless has no checkpoints/stage-breaks, and
+  // checkpointIndexAt clamps at 25 (== STAGE_BREAKS' last entry, the
+  // course-end break) for any worldX past the classic course's end, which
+  // an endless run will eventually blow past — gating on mode is what
+  // keeps that clamp from ever firing the classic course-end path.
   const cp = checkpointIndexAt(buggy.worldX);
   if (cp > game.checkpoint) {
     game.checkpoint = cp;
     game.events.push('checkpoint');
-    if (!invulnerable && STAGE_BREAKS.includes(cp)) {
+    if (game.mode === 'classic' && !invulnerable && STAGE_BREAKS.includes(cp)) {
       enterBoss(game, cp);
     }
   }
@@ -238,13 +254,66 @@ function enterBoss(game, checkpointIdx) {
 }
 
 /**
+ * Endless-mode boss entry (Task 13): triggered by elapsed run time
+ * (game.elapsedTotal >= game.nextBossAt, checked once per 'playing' frame
+ * in updateGame) rather than a checkpoint line — endless has no
+ * checkpoints/stage-breaks to anchor to. The arena is the same
+ * BOSS_ARENA_LEN-px clear zone as classic's enterBoss, just started at the
+ * buggy's current worldX instead of a checkpoint line. Difficulty scales
+ * the same 12+stage*6 (or 40hp/two-phase at stage 4) curve as classic —
+ * game.stage is set here, before startBoss reads it, from elapsed time
+ * rather than segment index; once a run runs long enough (elapsed >= 360s)
+ * every subsequent boss is the stage-4 "final" 40hp two-phase fight, which
+ * is the intended cap for an endlessly-scaling difficulty curve.
+ * game.nextBossAt advances immediately (not after the fight ends), per the
+ * brief's "game.nextBossAt = 90 then += 90".
+ */
+function enterEndlessBoss(game) {
+  const arenaStart = game.buggy.worldX;
+  clearZone(game.terrain, arenaStart, arenaStart + BOSS_ARENA_LEN);
+  game.enemies = [];
+  game.enemyShots = [];
+  game.stage = Math.min(4, Math.floor(game.elapsedTotal / 90));
+  startBoss(game);
+  setPhase(game, 'boss');
+  game.nextBossAt += 90;
+}
+
+/**
+ * Advances the endless-only run clock and the speed ramp it drives
+ * (Task 13). No-ops for classic. Called once per simulated frame from both
+ * the 'playing' and 'boss' cases below, mirroring exactly where/when
+ * game.stageTime itself accumulates (frozen during dying/respawning/
+ * stageClear).
+ *
+ * Speed ramp: +4 px/s to the buggy's band target every 30s, capped at +60
+ * (30s * 15 = 450s to cap). Applied via game.speedBonus, read by buggy.js's
+ * updateBuggy as an addend on top of SPEED_BANDS[band] — SPEED_BANDS
+ * itself is never mutated (it's a shared const imported all over), so
+ * classic (which never touches speedBonus, staying at its 0 default) is
+ * completely unaffected.
+ */
+function tickEndlessClock(game, dt) {
+  if (game.mode !== 'endless') return;
+  game.elapsedTotal += dt;
+  game.speedBonus = Math.min(60, Math.floor(game.elapsedTotal / 30) * 4);
+}
+
+/**
  * Enters the stageClear intermission. Z (the last STAGE_BREAKS index) is
  * the course-end case: it pays COURSE_BONUS + a par-time bonus instead of
  * the regular per-stage stageBonus(), and finishStageClear() swaps/loops
  * the course afterward rather than just incrementing `stage`.
  */
 function enterStageClear(game, checkpointIdx) {
-  const isCourseEnd = checkpointIdx === STAGE_BREAKS[STAGE_BREAKS.length - 1];
+  // Course-end (courseId swap to the champion course) is a classic-only
+  // concept. Gating on mode matters because checkpointIndexAt clamps at 25
+  // — STAGE_BREAKS' last entry — for any worldX past the classic course's
+  // end, which an endless run's game.checkpoint will eventually reach; an
+  // ungated check here would wrongly rebuild the terrain as
+  // buildClassicCourse(1) once that happened (see finishStageClear).
+  const isCourseEnd = game.mode === 'classic'
+    && checkpointIdx === STAGE_BREAKS[STAGE_BREAKS.length - 1];
   const champion = game.courseId === 1;
   const total = isCourseEnd
     ? COURSE_BONUS + 100 * Math.max(0, Math.floor(STAGE_PAR - game.stageTime))
@@ -311,16 +380,32 @@ function finishStageClear(game) {
 }
 
 /**
- * Rebuild the buggy from scratch at the last checkpoint. A fresh createBuggy()
+ * Rebuild the buggy from scratch at the respawn point. A fresh createBuggy()
  * (rather than resurrecting the dead one) guarantees vy/airborne/settle/
  * wheelPhase/deathCause are all clean — updateBuggy no-ops while `alive` is
  * false, so a half-reset buggy would silently freeze.
+ *
+ * Classic respawns at the last checkpoint line (checkpointX(game.checkpoint)
+ * — clamped to the 26-checkpoint course, which is exactly right there).
+ * Endless instead respawns at the nearest 1200px (CHECKPOINT_SPACING)
+ * boundary at or behind the death worldX, computed directly from
+ * game.buggy.worldX (still the dead buggy, frozen at its death position —
+ * updateBuggy no-ops once alive is false) rather than via
+ * checkpointX(game.checkpoint): checkpointIndexAt/checkpointX clamp to the
+ * classic course's 26 checkpoints, which a long-enough endless run would
+ * overrun, silently pinning every later respawn to the same stale spot.
+ * The boundary is always safe: endless terrain chunks (terrain.js's
+ * buildChunkFeatures) keep the first 150px after every CHECKPOINT_SPACING
+ * boundary clear, same guarantee the classic checkpoints rely on.
  */
 function respawn(game) {
+  const deathX = game.buggy.worldX;
   const buggy = createBuggy();
-  buggy.worldX = checkpointX(game.checkpoint);
+  buggy.worldX = game.mode === 'endless'
+    ? Math.floor(deathX / CHECKPOINT_SPACING) * CHECKPOINT_SPACING
+    : checkpointX(game.checkpoint);
   game.buggy = buggy;
-  game.speed = SPEED_BANDS[buggy.band];
+  game.speed = SPEED_BANDS[buggy.band] + (game.speedBonus || 0);
   game.jumpStartX = null; // a jump in progress at death never lands
 }
 
@@ -359,16 +444,56 @@ function resetToAttract(game) {
   Object.assign(game, createGame(game.mode, game.rngSeed));
 }
 
-export function updateGame(game, input, dt) {
+/**
+ * Leaves the attract screen's mode-select menu and starts a fresh run of
+ * whichever mode is highlighted (game.menuIndex: 0 = classic, 1 = endless).
+ * `seed` is optional deterministic-but-varied entropy for the new run's
+ * terrain/wave RNG: state.js itself never calls Date.now()/Math.random()
+ * (this module stays pure/Node-testable), so a caller with no seed to offer
+ * (e.g. a test) falls back to reusing game.rngSeed — deterministic, but the
+ * same seed every time. The presentation layer (main.js) is the sanctioned
+ * place to break that determinism: it may read Date.now() and pass the
+ * result in as `seed` (see updateGame's docstring below), so a real player
+ * gets a different course/enemy layout each run they start from the menu.
+ */
+function startSelectedRun(game, seed) {
+  const mode = game.menuIndex === 0 ? 'classic' : 'endless';
+  const runSeed = seed != null ? seed : game.rngSeed;
+  Object.assign(game, createGame(mode, runSeed));
+  setPhase(game, 'playing');
+}
+
+/**
+ * @param {object} game
+ * @param {object} input
+ * @param {number} dt
+ * @param {number} [seed] - Optional entropy for a new run started this call
+ *   (see startSelectedRun's docstring) — the ONLY place Date.now()-derived
+ *   values are allowed to reach this pure module, and only ever consumed at
+ *   the exact frame the attract-screen menu is dismissed; every other use
+ *   of randomness in this module and everything it calls goes through the
+ *   seeded mulberry32 RNGs (game.rngSeed/game.waveRng), never this.
+ */
+export function updateGame(game, input, dt, seed) {
   game.phaseTimer += dt;
 
   switch (game.phase) {
     case 'attract':
-      if (anyPressed(input)) setPhase(game, 'playing');
+      // Mode-select menu (Task 13): accel/brake toggle CLASSIC/ENDLESS;
+      // jump/fire starts the highlighted mode. This replaces the previous
+      // "any of the seven actions wakes the attract screen" behavior —
+      // pause/mute/restart are no-ops here now, same as they are once a
+      // run is actually underway.
+      if (input.pressed('accel') || input.pressed('brake')) {
+        game.menuIndex = game.menuIndex === 0 ? 1 : 0;
+      } else if (input.pressed('jump') || input.pressed('fire')) {
+        startSelectedRun(game, seed);
+      }
       break;
 
     case 'playing':
       game.stageTime += dt; // stage clock runs only during live play
+      tickEndlessClock(game, dt); // endless-only: run clock + speed ramp
       updateDrive(game, input, dt, false);
       // updateDrive may have entered 'boss' this frame (a stage-break
       // checkpoint just crossed — every STAGE_BREAKS entry now diverts into
@@ -376,6 +501,19 @@ export function updateGame(game, input, dt) {
       // that phase owns the rest of this frame instead of the usual
       // playing-phase systems.
       if (game.phase === 'boss' || game.phase === 'stageClear') break;
+      // Endless has no checkpoints to divert into a boss fight from — it's
+      // timed instead: once the run clock crosses game.nextBossAt, enter
+      // the boss the same way a classic stage-break does. Gated on phase
+      // still being 'playing' (not just !== 'boss'/'stageClear' above): a
+      // terrain hit inside updateDrive this same frame already moved us to
+      // 'dying', and entering the boss here would stomp that transition —
+      // clearing the death, forcing 'boss' back on, and losing the life
+      // deduction. The boss simply waits one more frame in that case.
+      if (game.mode === 'endless' && game.phase === 'playing'
+          && game.elapsedTotal >= game.nextBossAt) {
+        enterEndlessBoss(game);
+        break;
+      }
       spawnDirector(game, dt);
       updateEnemies(game, dt);
       if (input.pressed('fire')) fireDual(game);
@@ -468,6 +606,7 @@ export function updateGame(game, input, dt) {
       // leave behind on impact, via the normal bomb-vs-terrain path in
       // enemies.js's updateEnemies).
       game.stageTime += dt; // time bonus stays meaningful through a boss fight
+      tickEndlessClock(game, dt); // endless-only: run clock + speed ramp keep advancing through a fight
       updateDrive(game, input, dt, false);
       if (game.phase !== 'boss') break; // a terrain hit above already moved us to 'dying'
 

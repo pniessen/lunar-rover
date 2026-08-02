@@ -45,6 +45,7 @@ test('createGame produces the documented shape', () => {
   assert.equal(g.stage, 0);
   assert.equal(g.score, 0);
   assert.equal(g.rngSeed, 7);
+  assert.equal(g.menuIndex, 0, 'menu defaults to CLASSIC');
   assert.deepEqual(g.combo, {
     count: 0, mult: 1, timer: 0, lastSeenScoreEventCount: 0, lastSeenGameEventCount: 0,
   });
@@ -68,11 +69,21 @@ test('attract -> playing on any key, and the buggy does not move until then', ()
   assert.ok(g.buggy.worldX > 0, 'playing must advance the buggy');
 });
 
-test('attract wakes on any of the seven actions', () => {
-  for (const a of ['accel', 'brake', 'jump', 'fire', 'pause', 'mute', 'restart']) {
+// Task 13: the attract screen gained a CLASSIC/ENDLESS mode-select menu.
+// This replaces the old "any of the seven actions wakes the attract
+// screen" behavior — accel/brake now only toggle the menu (see the
+// dedicated endless.test.js menu tests for that), and pause/mute/restart
+// are no-ops here, same as once a run is underway.
+test('attract: only jump/fire start the game; accel/brake/pause/mute/restart do not', () => {
+  for (const a of ['jump', 'fire']) {
     const g = createGame('classic', 1);
     step(g, press(a));
     assert.equal(g.phase, 'playing', `${a} should start the game`);
+  }
+  for (const a of ['accel', 'brake', 'pause', 'mute', 'restart']) {
+    const g = createGame('classic', 1);
+    step(g, press(a));
+    assert.equal(g.phase, 'attract', `${a} should not start the game`);
   }
 });
 

@@ -58,7 +58,14 @@ function loop(t) {
   last = t;
   acc += elapsed;
   while (acc >= DT) {
-    updateGame(game, input, DT);
+    // The 4th argument is the ONLY place Date.now()-derived entropy is
+    // allowed to reach state.js — it stays a pure, Node-testable module
+    // that never calls Date.now()/Math.random() itself (see updateGame's
+    // docstring). It's read every step but only actually consumed on the
+    // exact frame the attract screen's mode-select menu is dismissed
+    // (jump/fire pressed while game.phase==='attract'), seeding that run's
+    // terrain/wave RNGs so repeated plays don't all replay the same layout.
+    updateGame(game, input, DT, Date.now());
     // input.pressed() is "just pressed this sim step" and is aged away by
     // endFrame() below — so the mute toggle has to be read here, inside the
     // fixed-timestep loop, not once per rendered frame. A rendered frame can
