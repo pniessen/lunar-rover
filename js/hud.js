@@ -11,10 +11,12 @@
 // flyer altitudes are absolute constants that know nothing about HUD_H:
 // enemies.js seeds formations at baseY 45-80 and swoopers oscillate that by
 // +/-20, so live, lethal enemies reach y ~= 25. A 46px panel would occlude a
-// further 10px of that airspace on top of the 11px it already hides. The boss
-// sweep geometry (boss.js HOVER_Y = 70) was painstakingly fixed after the boss
-// was once mathematically unhittable; nothing here is worth re-opening that.
-// Gameplay legibility outranks the proportion. See BUILD-LOG.
+// further 10px of that airspace on top of the 11px it already hides — and the
+// boss hovers in the same airspace (boss.js HOVER_Y = 70), so it would lose
+// visible headroom too. Occlusion is the whole argument; HUD_H is a drawing
+// constant that no pure module reads, so growing it could not move the sweep
+// geometry or any hitbox. Gameplay legibility outranks the proportion.
+// See BUILD-LOG.
 
 import { LETTERS, STAGE_BREAKS } from './terrain.js';
 import { loadScores } from './score.js';
