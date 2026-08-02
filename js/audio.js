@@ -74,9 +74,27 @@ function loadPrefs() {
   }
 }
 
+// Default AudioContext constructor lookup — a real browser at runtime.
+// createAudio() accepts an override so a Node test harness can inject a
+// fake AudioContext (audio.js otherwise never references `window`/
+// `AudioContext` anywhere outside resume(), so this is the only seam
+// needed to unit-test the scheduler without a real WebAudio implementation).
+function defaultContextFactory() {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  return Ctx ? new Ctx() : null;
+}
+
 // --- factory ----------------------------------------------------------------
 
-export function createAudio() {
+/**
+ * @param {() => (AudioContext|null)} [contextFactory] - constructs the
+ *   AudioContext used by resume(); defaults to the real browser one.
+ *   Exposed for tests: pass a factory that returns a fake context exposing
+ *   the same shape (createOscillator/createGain/createBufferSource/
+ *   createBiquadFilter/createBuffer/currentTime/sampleRate/destination) to
+ *   drive the real scheduling code without importing WebAudio into Node.
+ */
+export function createAudio(contextFactory = defaultContextFactory) {
   const prefs = loadPrefs();
   const a = {
     muted: prefs.muted ?? false,
@@ -257,6 +275,16 @@ export function createAudio() {
     const name = music.name;
     if (name !== 'main' && name !== 'boss') return; // one-shot or silent: nothing left to schedule
     const stepDur = name === 'main' ? MAIN_STEP_DUR : BOSS_STEP_DUR;
+    // If the tab was backgrounded/throttled long enough that nextTime has
+    // fallen behind the audio clock (rAF can pause for tens of seconds while
+    // ctx.currentTime keeps ticking), catching up step-by-step would burst
+    // hundreds of stale, in-the-past notes into the graph in one call — an
+    // audible glitch and a main-thread hitch. Clamp forward to "now" instead
+    // of walking every missed step: the pattern's stepIndex just keeps
+    // counting from where it left off. A silent jump in the melody's grid
+    // position is the unavoidable cost of having been paused; there's no way
+    // to also preserve wall-clock beat alignment across an arbitrary gap.
+    if (music.nextTime < ctx.currentTime) music.nextTime = ctx.currentTime + 0.02;
     const aheadUntil = ctx.currentTime + SCHEDULE_AHEAD;
     while (music.nextTime < aheadUntil) {
       if (name === 'main') scheduleMainStep(music.nextTime, music.stepIndex);
@@ -286,6 +314,9 @@ export function createAudio() {
       siren.active = false; // stops feeding new beeps; any already-scheduled finish naturally
     }
     if (siren.active) {
+      // Same unbounded-catch-up hazard as updateMusic() above: clamp a
+      // stale nextTime forward instead of walking every missed beep.
+      if (siren.nextTime < ctx.currentTime) siren.nextTime = ctx.currentTime + 0.02;
       const aheadUntil = ctx.currentTime + SCHEDULE_AHEAD;
       while (siren.nextTime < aheadUntil) {
         const hi = siren.stepIndex % 2 === 0;
@@ -298,7 +329,17 @@ export function createAudio() {
 
   // --- event-triggered SFX ---------------------------------------------------
 
-  const sfx = {
+  // Object.create(null): events are looked up by an arbitrary, effectively
+  // attacker/future-task-controlled string (game.events entries). A plain
+  // {} literal inherits Object.prototype, so a colliding name like
+  // 'constructor'/'toString'/'hasOwnProperty' would resolve to a builtin
+  // and get called unbound (`handler()`, no receiver) — in strict-mode ES
+  // modules that throws (e.g. hasOwnProperty's ToObject(undefined)), which
+  // would propagate out of processEvents() and freeze the whole game loop
+  // (main.js has no try/catch around it). A null-prototype object has no
+  // inherited keys at all, so any name not explicitly listed below is
+  // simply `undefined` and silently skipped by the `if (handler)` guard.
+  const sfx = Object.assign(Object.create(null), {
     fire: () => playTone({ wave: 'square', f0: 660, f1: 440, dur: 0.06, peak: 0.22 }),
     jump: () => playTone({ wave: 'sine', f0: 180, f1: 320, dur: 0.15, peak: 0.2 }),
     land: () => playTone({ wave: 'sine', f0: 90, dur: 0.05, peak: 0.26 }),
@@ -348,7 +389,7 @@ export function createAudio() {
     bossDown: () => playNoiseSweep({
       f0: 600, f1: 50, dur: 0.6, peak: 0.36, filterType: 'lowpass', q: 0.9,
     }),
-  };
+  });
 
   // --- public API --------------------------------------------------------
 
@@ -358,9 +399,8 @@ export function createAudio() {
       return;
     }
     try {
-      const Ctx = window.AudioContext || window.webkitAudioContext;
-      if (!Ctx) return; // WebAudio unavailable — every method below stays a safe no-op
-      ctx = new Ctx();
+      ctx = contextFactory();
+      if (!ctx) return; // WebAudio unavailable — every method below stays a safe no-op
       masterGain = ctx.createGain();
       masterGain.gain.value = a.muted ? 0 : 1;
       masterGain.connect(ctx.destination);
