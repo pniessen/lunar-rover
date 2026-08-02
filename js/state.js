@@ -10,7 +10,7 @@ import {
   buildClassicCourse, createEndlessTerrain, ensureGenerated,
   checkpointIndexAt, checkpointX,
 } from './terrain.js';
-import { updateWeapons } from './weapons.js';
+import { fireDual, updateWeapons } from './weapons.js';
 
 export const DT = 1 / 60;          // fixed simulation timestep, seconds
 export const DYING_TIME = 0.9;     // explosion hold before the respawn
@@ -130,14 +130,16 @@ export function updateGame(game, input, dt) {
     case 'playing':
       game.stageTime += dt; // stage clock runs only during live play
       updateDrive(game, input, dt, false);
-      updateWeapons(game, input, dt);
+      if (input.pressed('fire')) fireDual(game);
+      updateWeapons(game, dt);
       break;
 
     case 'dying':
-      // Buggy is dead: never call updateBuggy/killBuggy here. Shots already
-      // in flight still fly (and can still score) while the buggy explodes;
-      // fireDual's own phase guard keeps new shots from being fired.
-      updateWeapons(game, input, dt);
+      // Buggy is dead: never call updateBuggy/killBuggy here, and never
+      // trigger fireDual — the player cannot fire while exploding. Shots
+      // already in flight still fly (and can still score) while the buggy
+      // explodes, so updateWeapons still runs to move/collide/cull them.
+      updateWeapons(game, dt);
       if (game.phaseTimer >= DYING_TIME) {
         if (game.lives <= 0) {
           setPhase(game, 'gameOver');
@@ -152,7 +154,8 @@ export function updateGame(game, input, dt) {
       updateDrive(game, input, dt, true);
       // Invulnerability (skipped terrain collision above) only affects
       // deaths — the player can still shoot while blinking in.
-      updateWeapons(game, input, dt);
+      if (input.pressed('fire')) fireDual(game);
+      updateWeapons(game, dt);
       if (game.phaseTimer >= RESPAWN_TIME) setPhase(game, 'playing');
       break;
 

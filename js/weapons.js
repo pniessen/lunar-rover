@@ -146,21 +146,14 @@ function cullShots(game) {
 }
 
 /**
- * updateWeapons(game, input, dt) is the interface consumed by state.js's
- * game loop. It also accepts the 2-arg form updateWeapons(game, dt) used by
- * tests that drive shot movement/collision directly without an input
- * object — detected by `dt` being undefined, in which case the 2nd
- * positional argument is treated as dt and no fire input is processed that
- * call.
+ * updateWeapons(game, dt) — movement/collision/culling only. It does not
+ * read input or call fireDual: state.js's game loop is responsible for
+ * calling fireDual(game) itself (on input.pressed('fire')) before calling
+ * this, in whichever phases firing is allowed. Keeping input handling out
+ * of this function means its signature is unambiguous — no arity-sniffing,
+ * no silent no-op if a caller forgets an argument.
  */
-export function updateWeapons(game, input, dt) {
-  if (dt === undefined) {
-    dt = input;
-    input = null;
-  }
-  if (input && typeof input.pressed === 'function' && input.pressed('fire')) {
-    fireDual(game);
-  }
+export function updateWeapons(game, dt) {
   moveShots(game, dt);
   collideShots(game);
   cullShots(game);
