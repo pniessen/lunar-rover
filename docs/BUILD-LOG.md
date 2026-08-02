@@ -56,7 +56,8 @@ The fix wave (`ef1f38e`, `4bd6f68`) redesigned the fight: deterministic sweep (`
 
 ## Testing conventions
 
-- Run with `node --test tests/*.test.js` — the bare `node --test tests/` form misbehaves on this machine's Node v26. 251 tests, all green.
+- Run with `node --test tests/*.test.js` — the bare `node --test tests/` form misbehaves on this machine's Node v26. 266 tests, all green.
+- **Colours are not a matter of taste on this project.** `.superpowers/notes/authenticity-research.md` holds the decoded M52 colour PROMs, verified twice over; `tests/render.test.js` pins the whole-game 35-colour gamut and the sprite DAC's `#C1C8C8` ceiling. If a new colour is needed, take it from the brief — a value that isn't in the gamut fails the suite.
 - Terrain test doubles: any collision consumer honors `terrain.mode === 'test'` with a bare `features` array.
 - **The load-bearing lesson of this project:** hand-placed projectiles test collision predicates, not gameplay. Any claim that "X can be shot/reached/collected" needs a **real-path reachability test** — a bot that only calls `input.pressed()` driving `updateGame` end to end. Patterns to copy: `playerBot`/`fightWithBot` in `tests/boss.test.js` (~line 1146) and the REACHABILITY tests at the end of `tests/enemies.test.js` (seeded first waves: seed 5 → aimer pair, seed 6 → swooper formation; mutation-verified against removing the up-shot speed carry).
 - Reviewers on this project reproduced bugs empirically (worktree checkouts of pre-fix commits, standalone repro scripts) rather than trusting reports — keep that bar.
@@ -252,6 +253,263 @@ case rather than assuming it.
   was verified live in-browser instead, matching how the rest of the
   presentation layer — `main.js`, `sprites.js`'s `rasterize` — is already
   excluded from `node --test` coverage for the same reason).
+
+## Authentic-palette pass (2026-08-02, post-v1)
+
+The remake's colours were eyeballed. They are now the arcade's actual colours.
+
+**Source of the values.** `.superpowers/notes/authenticity-research.md` — a
+research pass that read the M52's four colour PROMs as plain byte dumps
+(`mpc-1.1f` sprites, `mpc-2.2h` sprite colour sets, `mpc-3.1m` backgrounds,
+`mpc-4.2a` text/tiles), reimplemented MAME's `resnet.cpp`
+`compute_resistor_weights()` against them, and cross-checked the result against
+two lossless native-resolution modern-MAME captures. **All 20 on-screen colours
+matched the decode exactly, on both captures, with zero unexplained pixels.**
+An older capture disagrees in a fully explained way (a legacy MAME build with
+naive palette weights and no sprite pulldown). Treat that brief as the source
+of truth for any future colour question; do not re-eyeball.
+
+The one fact that cannot be guessed: **the sprite palette PROM has red and blue
+bits swapped relative to the char/background PROMs, and its DAC carries a
+470-ohm pulldown on every channel.** So sprites top out at `#C1C8C8` (~76%
+amplitude) and physically cannot be `#FFFFFF`, while the tile layer (HUD text,
+the player's up-shot) reaches full white. That brightness gap between layers is
+a real part of the look, not a bug to correct.
+
+What changed:
+
+- **Terrain strip is one flat `#FF9751` peach** (was `#e05098` hot pink). The
+  highlight line, shade band and procedural dust speckle were **deleted**, not
+  recoloured — the arcade ground band is 100% one colour, and the undulating
+  profile plus the craters carry all the interest. Verified in-browser by
+  histogramming the whole rendered band: **117 504 of 117 504 pixels `#FF9751`,
+  one distinct colour.**
+- **Mountains became filled bands.** `ridgeMap` no longer emits a snow-cap /
+  lit-edge / body / shaded-base four-tone silhouette; it emits two pens — a
+  peak band and a solid fill to the bottom of the strip — because on hardware
+  each background layer is a 2bpp image whose remainder MAME fills with the
+  layer's pen 3. Distant mountains: `#0000FF` blue peaks over `#0097AE` teal.
+  Hills: `#009700` mid-green ridge over `#00DE51` bright green. Band heights
+  went 56→84 and 26→40 px; the arcade's are 98 and ~70 of a 248-row frame, and
+  the brief notes our 384px reframing shows ~2.4x more world per screen, which
+  is exactly what makes thin bands read as sparse. Presentation-only — the
+  strips are drawn from `GROUND_Y` upward and sit behind every entity.
+- **HUD is a lit `#0021FF` blue panel** with a `#00B8FF` cyan sub-panel of the
+  arcade's literal 128px width, positioned so its centre sits at ~59% of our
+  wider buffer against the arcade's ~61%. Text is `#FF2100` red-orange,
+  `#FFFF00` yellow, `#210000` near-black on cyan, `#FFFFFF` white.
+- **The A-Z bar is now a filled bar**, not a 26-tick row: red fill to the
+  player's position over a cyan track, with 1px red dividers at E/J/O/T/Z and
+  the letters above in red. The fill edge *is* the position marker, so the old
+  yellow cursor is gone.
+- **Life icons are drawn in the tile layer** as red-orange pips instead of the
+  buggy sprite squashed to 10x5. Necessary, not cosmetic: the authentic buggy
+  is `#C100AE` magenta and magenta-on-blue at 5px tall was unreadable the
+  moment the panel stopped being near-black.
+- **Buggy is 3 colours** (was 12): `#C100AE` body, `#00001A` outline/wheels,
+  `#00AEC8` trim/hubs. Chassis, forward barrel and vertical mast are all one
+  magenta — there is no white driver, no blue canopy, no grey cannon on the
+  original. The silhouette (32px chassis, three wheels on a ~10px pitch) is
+  unchanged and was already measured correct; only the colour structure was
+  redrawn, as original pixel art. **No ROM bitmaps were transcribed** — the
+  project's no-binary-assets, code-generated-art rule holds. The old comment
+  claiming the body "matches the terrain strip" was backwards and is gone: the
+  original deliberately contrasts magenta against peach.
+- **Rocks are `#845100` brown + `#3E3700` dark tan** (sprite colour set 4, the
+  arcade's exact two). Craters are flat black notches with no rim highlight.
+  UFOs use set 7 (`#C1C800` yellow hull / `#3E90C8` sky-blue dome / `#C10000`
+  lights); explosions use set 3 (`#840000` / `#C1C8C8` / `#C1C800`).
+- **`STAGE_PALETTES` collapsed to one palette.** The five per-stage hue themes
+  cannot be authentic: `mpc-3.1m` is 32 bytes holding five distinct colours and
+  each layer has exactly one colour triple, so the background images physically
+  cannot change hue between stages. The five-element **array shape is kept
+  deliberately** — `game.stage` still indexes it, and the next pass hooks the
+  real variety mechanism in here: the mid-ground alternates hills ↔ city ruins
+  via the background-control port while the distant mountains are always drawn.
+  **That next pass has since landed — see "City-ruins layer" below.**
+
+**Every colour in the game is now a verified PROM value.** In-browser
+histograms of the live rendered frame: HUD band = `{#0021FF, #00B8FF, #FF2100,
+#210000, #FFFF00}`; mountain band = `{#000000, #0000FF, #0097AE, #FFFFFF}`;
+hill band = `{#0097AE, #00DE51, #009700, #0000FF, #000000, #C100AE, #00001A,
+#845100}`; terrain band = `{#FF9751}`. No strays.
+
+### Deliberate deviations (both documented on purpose)
+
+1. **`HUD_H` stays 36 (15.0%); the arcade's is 48 of 248 (19.4%).** The change
+   is provably invisible to the *simulation* — `HUD_H` is exported by `state.js`
+   but imported only by `render.js` and `hud.js`, and no pure module reads it —
+   but it is **not** invisible to play. The HUD is drawn over the world every
+   frame, and flyer altitudes are absolute constants that know nothing about
+   `HUD_H`: `enemies.js` seeds formations at `baseY` 45–80 and swoopers
+   oscillate that by ±20, so live, lethal enemies reach y ≈ 25. A 46px panel
+   would occlude a further 10px of that airspace on top of the 11px it already
+   hides. Add that the boss sweep (`HOVER_Y` = 70) was painstakingly fixed after
+   the boss was once mathematically unhittable, and there is nothing here worth
+   re-opening. Gameplay legibility outranks the proportion. Noted in a comment
+   at the top of `hud.js`.
+2. **The starfield and the Earth stay.** Verified across three captures, the
+   Moon Patrol sky is pure `#000000` with nothing in it — no stars, no
+   celestial body. Keeping them is this remake's one intentional visual
+   addition, chosen by the user. The sky *colour* underneath is now the
+   authentic black, and the Earth sprite was recoloured into the hardware
+   sprite gamut, so the deviation is a shape choice rather than a palette one.
+
+Lesser, flagged-not-hidden: the tank, chase car, bomb, mine, capsule and
+mothership have **no verified arcade colour set** — the research brief could
+obtain no capture containing any of them and explicitly refused to guess. They
+are coloured from real in-gamut sprite-PROM entries rather than an invented
+hue, and the two extra UFO variants (which the remake needs so swooper /
+aimer / bomber read apart) use real colour sets 8 and D. In-gamut, not
+attributed.
+
+- **Testing.** 223 → 229. Four new tests in `tests/render.test.js` pin the
+  invariants that actually matter: every colour in the sprite sheet is one of
+  the 35 the hardware can produce; no sprite exceeds the sprite DAC's per-
+  channel ceiling (with the three genuinely-not-a-sprite exceptions named);
+  `STAGE_PALETTES` is one palette with no `groundTop`/`groundShade` keys and
+  the array shape intact. Two in `tests/hud.test.js` pin the filled bar
+  (fill fraction, exactly five dividers, clamping past Z, and an explicit
+  "not a 26-tick row" assertion). All mutation-verified — reverting the ground
+  to pink, un-clamping sprite white, and deleting the bar's cyan track each
+  fail the suite. `tests/hud.test.js`'s existing warning-light off-phase
+  constant moved `#5a2018` → `#210000` with the palette.
+- **Verified live in the browser**, not just in Node: attract screen, ordinary
+  driving, buggy close-up and a UFO wave all captured before and after; the
+  pixel histograms above were sampled from the real canvas with the CRT overlay
+  toggled off so the values are the raw buffer. Zero console messages.
+  Known cosmetic side effect: the attract screen's existing 45%-black dim over
+  the whole play area turns the vivid peach regolith muddy brown. It did the
+  same to the old pink, it is needed for the control-hint block's legibility,
+  and it was left alone rather than retuned in a colour pass.
+
+## City-ruins layer + hills↔city alternation (2026-08-02, post-v1)
+
+The variety mechanism the palette pass left a hook for. **What alternates
+across the course is not the palette — it is which mid-ground image is drawn.**
+
+- **What the hardware does.** The distant mountains (bg0) are always on. The
+  background-control port `$C0` suppresses one of the two mid-ground layers,
+  which share a single scroll register and therefore can never both show:
+  `0x04` suppresses the city (leaving rolling hills, bg1), `0x02` suppresses
+  the hills (leaving city ruins, bg2). One palette throughout — brief §7
+  finding 3, §8.3.
+- **The sequence, and how sure we are of it.** The disassembly at `$0C08` reads
+  a section counter `mE513` and computes `A' = (s-1) + (s-1 < 5 ? 1 : 0)`, then
+  picks the layer off bit 0 of `A'`. For a 1-based counter that is `A' = s` for
+  `s` in 1..5 and `s-1` after, so the parity repeats with **period 5 while
+  staying phase-aligned**: sections 1-5 give hills/city/hills/city/hills and
+  6-10 give exactly the same again — five sections per course, every course
+  starting on hills. `STAGE_PALETTES[section % 5]` reproduces that exactly,
+  including the doubled hills the `CP $05 / ADC $00` fixup creates at the 5→6
+  wrap. **The brief labels the per-section sequence INFERRED** (it did not
+  trace `mE513`'s initialisation); the MECHANISM is the verified part. This is
+  documented at the constant so nobody later mistakes the sequence for measured
+  fact.
+- **The cadence, per mode.** `backgroundSection(game)` in `render.js` is the
+  one place the counter is decided, and it is a pure function of `game` —
+  no wall clock, no randomness.
+  - **Classic:** `game.stage`. state.js already bumps it at every
+    `STAGE_BREAKS` checkpoint (E/J/O/T/Z) and resets it to 0 on the course
+    rollover — which *is* the arcade's five-per-course, start-on-hills
+    structure. The swap therefore always lands inside a stage-break boss fight
+    / STAGE CLEAR intermission, never mid-drive. Verified live by forcing a
+    real `finishStageClear` (not by poking `game.stage`): hills → overlay →
+    city.
+  - **Endless:** endless has no checkpoints, and `game.stage` there is
+    deliberately **clamped at 4** (it is a difficulty step, recomputed as
+    `min(4, floor(elapsedTotal / ENDLESS_BOSS_PERIOD))`). Reusing it would
+    freeze the background on hills forever after six minutes — the same class
+    of bug as Task 13's. Endless's only real structure is its 90-second boss
+    cadence, so that is the cadence used: **one section per boss cycle,
+    unclamped**, alternating for as long as the run lasts. A section is ~90s in
+    both modes, and in endless the swap lands on the frame the boss appears.
+    Measured live over 8 cycles: hills/city/hills/city/hills/**hills**/city/
+    hills — the period-5 wrap, with `game.stage` pinned at its cap throughout.
+- **The art.** `CITY_MAP` in `sprites.js`, generated from a 12-structure
+  skyline spec (towers with jagged sheared tops, two domes, an arch, columns,
+  stepped slabs, rubble stubs) plus window grids and three blown-open gashes.
+  256px wide — the hardware's real wrap (brief §8.3) and less obviously looped
+  than the 96px ridge strips — and 40px tall, the same height as
+  `MOUNTAIN_NEAR_MAP`, drawn at the same `GROUND_Y - height` and the same
+  `P_NEAR` parallax. It is a swap, not a new layer. Three pens, all from the
+  city layer's own verified triple: `#00DE51` mass and below-image fill,
+  `#FFDE51` lit rim, `#000000` openings. **Original pixel art — no ROM bitmap
+  was transcribed**, holding the project's code-generated-art rule.
+  The gashes and the jagged tower tops exist because the first draft read as an
+  intact skyline: without a hole through the silhouette, tidy window grids on
+  square blocks look like a living city, not ruins.
+- **Dead machinery retired.** `createRenderer` used to rasterize one mountain
+  set *per stage palette*; with a single palette those were five identical
+  strips. It now rasterizes three images once (`far`, `hills`, `city`) and
+  `drawBackdrop` picks. `drawMountains(r, stage, camX)` became
+  `drawBackdrop(r, pal, camX)`. `ENDLESS_BOSS_PERIOD` was hoisted in `state.js`
+  out of three separate `90` literals (no value changed).
+- **Attract-screen dim fixed.** The attract overlay used to dim the **whole
+  buffer** 45% black, including the terrain strip, because the control-hint
+  block was laid out down on the regolith and needed a backdrop. That turned
+  the authentic `#FF9751` peach into a muddy `#8C532C` on the first screen
+  anyone sees. **The fix is layout, not alpha:** the whole attract block moved
+  up (title 81→62, menu 126/138→106/118, table 152→132, prompt 182→166, hints
+  206/216→180/190) so it ends 3px clear of `GROUND_Y`, and the dim now stops at
+  `GROUND_Y` exactly like the pause / stage-clear / game-over overlays. The
+  hints get the identical dimmed backdrop for free. A backing panel behind just
+  the hints was considered and rejected: hint line 2 is 62 glyphs — the widest
+  thing on the screen — so its panel would have been full-buffer-width and no
+  better. **Verified by sampling the real app's canvas: 1638/1638 samples
+  across the attract ground band are exactly `#FF9751`.**
+- **Two documentation fixes** carried in the same pass: `sprites.js`'s
+  `mine0`/`mine1` gained the "colour set unknown (§4), in-gamut, not
+  attributed" note its five sibling unattributed sprites already carry, and
+  `hud.js`'s HUD_H rationale was reworded — it implied growing `HUD_H` risked
+  the boss sweep geometry, but `HUD_H` is a drawing constant no pure module
+  reads, so it cannot move a hitbox. Occlusion of the flyer/boss airspace was
+  always the real and sufficient argument.
+- **Testing.** 229 → 238. Nine new tests in `tests/render.test.js`: the classic
+  five-section sequence; `paletteFor`/`backgroundSection` in classic including
+  the course-rollover reset; endless alternating past `game.stage`'s cap; the
+  counter never indexing off the table or going negative (undefined/partial
+  `game`, NaN elapsed, huge values); the city palette being exactly the three
+  verified bg_pal pens; the strip matching the hills' height and the 256px
+  hardware wrap; **seam-tileability** (nothing straddles column 0 / w-1, which
+  `drawTiled` would slice at every repeat); a "looks like a city" shape test
+  (lit rim present, openings spread across >40 columns, >20px of skyline
+  variation, ≥8 sheer building edges); and `validateMap` self-consistency.
+  All mutation-verified: removing the alternation, keying endless off the
+  clamped `game.stage`, putting a building on the seam, an off-gamut city pen,
+  deleting the lit rim, squashing the skyline, and deleting the window grids
+  each fail the suite.
+- **Verified live in the browser**, not just in Node: hills stretch, city
+  stretch, the STAGE CLEAR transition frame, an endless city section, and the
+  fixed attract screen all captured; band histograms sampled off the raw buffer
+  with the CRT overlay off show only in-gamut values (`#000000 #0000FF
+  #0097AE #00DE51 #FFDE51` plus sprite/tile colours). Zero console errors. The
+  starfield, Earth, ground, HUD and hills are pixel-unchanged from the palette
+  pass.
+
+**Watch item for whoever reads this next.** During this pass a reviewer
+inspected the *uncommitted working tree* and reported the city layer as
+"already shipped in commits 8b7db2e/dfe3aa3", concluding the BUILD-LOG was
+lying about it being unbuilt. It was not: `git show HEAD:js/render.js` at
+dfe3aa3 contains no `MID_CITY`/`backgroundSection`/`CITY_MAP` at all. The
+reviewer had read this pass's own in-progress edits. **Check `git show
+<commit>:<file>` before concluding that documentation contradicts the code** —
+acting on that report would have deleted the feature.
+
+**The orchestrator-side root cause, and the rule that prevents it.** That
+reviewer was contaminated because a reviewer and an implementer were dispatched
+*in parallel against the same files*. Reviews are read-only, so this looks safe;
+it is not, because the reviewer's evidence is the filesystem. Two earlier
+reviewers in this project flagged the same hazard when they noticed a tree
+mutating under them — it was tolerated twice before it finally produced a false
+finding that a subagent was told to act on. The subagent was right to refuse and
+verify against commits first; that pushback is what saved the work.
+**Rules going forward:** (1) never run an implementer and a reviewer
+concurrently over overlapping files — sequence them; (2) reviewers must inspect
+a pinned `git worktree` or use `git show <sha>:<path>`, never `grep` the live
+working directory as evidence about a commit; (3) an instruction derived from a
+review finding is not authority — verify the finding against committed state
+before destroying anything, and push back if it does not hold.
 
 ## Touch-controls pass (2026-08-02, post-v1)
 

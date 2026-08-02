@@ -144,9 +144,10 @@ test('endless boss difficulty scales off elapsed time (stage = min(4, floor(elap
 // *between-bosses* 'playing' window (it gets silently overwritten back to
 // the correct value the next time a boss triggers, which is why the
 // bug only shows up between fights, not at trigger time — see the
-// per-cycle assertions below). Past STAGE_PALETTES.length/mountains.length
-// that unbounded stage falls back to the stage-0 look, visually reverting
-// a long endless run instead of staying on the stage-4 theme.
+// per-cycle assertions below). An unbounded stage pushes the difficulty
+// step past the cap the endless curve is meant to settle on. (It used to
+// wreck the visuals too, back when render.js indexed per-stage palettes by
+// `stage`; the background now runs off its own unclamped section counter.)
 test('endless game.stage stays capped at 4 across many boss cycles', () => {
   const g = createGame('endless', 1);
   g.phase = 'playing';
