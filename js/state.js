@@ -214,6 +214,14 @@ function tickStageClearTally(game) {
  * this both starts the champion course the first time and loops it every
  * time after) and reset the run's position/checkpoint/stage cleanly so it
  * restarts at A.
+ *
+ * The course-end branch also clears every live entity (enemies, enemy
+ * shots, player shots) and the wave-spawn timer. Without this, entities
+ * near the old Z line — parked at their stale worldX — would survive into
+ * the new lap fully collidable (the champion course reuses the same
+ * worldX range as the beginner course), since culling only removes
+ * entities *behind* the buggy, not ones simply left over from a previous
+ * lap at a worldX the buggy is about to revisit.
  */
 function finishStageClear(game) {
   const sc = game.stageClear;
@@ -231,6 +239,10 @@ function finishStageClear(game) {
     buggy.vy = 0;
     buggy.airborne = false;
     buggy.settle = 0;
+    game.enemies = [];
+    game.enemyShots = [];
+    game.playerShots = [];
+    game.waveTimer = undefined; // spawnDirector lazily re-seeds this on its next call
   } else {
     game.stage += 1;
   }

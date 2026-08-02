@@ -167,6 +167,66 @@ test('crossing a STAGE_BREAKS checkpoint triggers stageClear, pays the tally, th
   assert.ok(g.events.includes('tally'), 'tally events were emitted while paying out');
 });
 
+// --- Z / course-end progression --------------------------------------------
+
+const Z_IDX = STAGE_BREAKS[STAGE_BREAKS.length - 1];
+
+/** Seeds one enemy, one enemy shot, and one player shot near worldX. */
+function seedEntitiesNear(g, worldX) {
+  g.enemies = [{ id: 1, kind: 'tank', x: worldX, y: 0, vx: 0, vy: 0, hp: 1, t: 0 }];
+  g.enemyShots = [{ id: 2, kind: 'level', from: 1, x: worldX, y: 0, vx: -1, vy: 0 }];
+  g.playerShots = [{ x: worldX, y: 0, vx: 1, vy: 0, dir: 'fwd' }];
+}
+
+test('crossing Z promotes to the champion course and clears stale entities', () => {
+  const g = createGame('classic', 1);
+  g.phase = 'playing';
+  g.terrain = { mode: 'test', features: [] };
+  g.buggy.worldX = checkpointX(Z_IDX) - 1;
+  seedEntitiesNear(g, g.buggy.worldX + 50);
+  g.waveTimer = 3; // simulate an in-progress wave timer from the old lap
+
+  stepUntilPhaseChanges(g); // playing -> stageClear
+  assert.equal(g.phase, 'stageClear');
+  assert.ok(g.stageClear.isCourseEnd);
+
+  stepUntilPhaseChanges(g); // stageClear -> playing
+  assert.equal(g.phase, 'playing');
+  assert.equal(g.courseId, 1, 'courseId promotes to the champion course');
+  assert.equal(g.terrain.courseId, 1, 'terrain is rebuilt as the champion course');
+  assert.equal(g.checkpoint, 0, 'checkpoint resets to A');
+  assert.equal(g.stage, 0);
+  assert.equal(g.buggy.worldX, 0, 'buggy restarts at A');
+
+  assert.deepEqual(g.enemies, [], 'stale enemies must not survive the course restart');
+  assert.deepEqual(g.enemyShots, [], 'stale enemy shots must not survive the course restart');
+  assert.deepEqual(g.playerShots, [], 'stale player shots must not survive the course restart');
+  assert.equal(g.waveTimer, undefined, 'wave timer resets so the new lap spawns fresh');
+});
+
+test('crossing Z again on the champion course loops it and still clears stale entities', () => {
+  const g = createGame('classic', 1);
+  g.phase = 'playing';
+  g.courseId = 1;
+  g.terrain = { mode: 'test', features: [], courseId: 1 };
+  g.buggy.worldX = checkpointX(Z_IDX) - 1;
+  seedEntitiesNear(g, g.buggy.worldX + 50);
+
+  stepUntilPhaseChanges(g); // playing -> stageClear
+  assert.equal(g.phase, 'stageClear');
+  assert.ok(g.stageClear.isCourseEnd);
+
+  stepUntilPhaseChanges(g); // stageClear -> playing
+  assert.equal(g.phase, 'playing');
+  assert.equal(g.courseId, 1, 'stays on the champion course when looping');
+  assert.equal(g.checkpoint, 0);
+  assert.equal(g.buggy.worldX, 0);
+
+  assert.deepEqual(g.enemies, [], 'stale enemies must not survive the loop');
+  assert.deepEqual(g.enemyShots, [], 'stale enemy shots must not survive the loop');
+  assert.deepEqual(g.playerShots, [], 'stale player shots must not survive the loop');
+});
+
 test('jump-over a crater awards craterJump 100', () => {
   const g = createGame('classic', 1);
   g.phase = 'playing';
