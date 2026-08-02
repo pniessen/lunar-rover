@@ -6,6 +6,7 @@ import { buildSprites, rasterize, MOUNTAIN_FAR_MAP, MOUNTAIN_NEAR_MAP } from './
 import { featuresInRange } from './terrain.js';
 import { buggyScreenX, DT, DYING_TIME, VIEW_W, VIEW_H, GROUND_Y, HUD_H } from './state.js';
 import { mulberry32 } from './rng.js';
+import { drawText, textWidth, drawHUD } from './hud.js';
 
 const STAR_WORLD_W = 2048; // starfield wrap width, in starfield-local px
 const STAR_COUNT = 110;
@@ -115,17 +116,12 @@ function drawTiled(ctx, img, offset, y) {
   }
 }
 
-function text(ctx, str, x, y, color = '#ffffff', size = 8) {
-  ctx.font = `${size}px monospace`;
-  ctx.textBaseline = 'top';
-  ctx.fillStyle = color;
-  ctx.fillText(str, Math.round(x), Math.round(y));
-}
-
-function centerText(ctx, str, y, color = '#ffffff', size = 8) {
-  ctx.font = `${size}px monospace`;
-  const w = ctx.measureText(str).width;
-  text(ctx, str, (VIEW_W - w) / 2, y, color, size);
+// Bitmap-font centered text (see hud.js) — used by every overlay so the
+// attract/game-over/stage-clear screens share the HUD's crisp pixel font
+// instead of the browser's anti-aliased canvas text.
+function centerText(ctx, str, y, color = '#ffffff', scale = 1) {
+  const w = textWidth(str, scale);
+  drawText(ctx, (VIEW_W - w) / 2, y, str, color, scale);
 }
 
 function drawCentered(ctx, img, cx, cy) {
@@ -256,28 +252,17 @@ function drawEntities(r, game, camX) {
   }
 }
 
-function drawHud(r, game) {
-  const { ctx } = r;
-  ctx.fillStyle = '#0a0a12';
-  ctx.fillRect(0, 0, VIEW_W, HUD_H);
-  ctx.fillStyle = '#3a3a5c';
-  ctx.fillRect(0, HUD_H - 1, VIEW_W, 1);
-
-  text(ctx, `1UP ${String(game.score).padStart(6, '0')}`, 8, 6, '#ffffff');
-  text(ctx, `LIVES ${game.lives}`, 8, 18, '#ff8fc8');
-}
-
 function drawOverlays(r, game, screenX, by) {
   const { ctx, sprites } = r;
 
   if (game.phase === 'attract') {
     ctx.fillStyle = 'rgba(0,0,0,0.45)';
     ctx.fillRect(0, HUD_H, VIEW_W, GROUND_Y - HUD_H);
-    centerText(ctx, 'LUNAR ROVER', 82, '#3a0f26', 20);
-    centerText(ctx, 'LUNAR ROVER', 80, '#ff8fc8', 20);
-    centerText(ctx, 'RETRO-MOD', 106, '#7fd8ff', 8);
+    centerText(ctx, 'LUNAR ROVER', 83, '#3a0f26', 3);
+    centerText(ctx, 'LUNAR ROVER', 81, '#ff8fc8', 3);
+    centerText(ctx, 'RETRO-MOD', 110, '#7fd8ff', 1);
     if (Math.floor(game.phaseTimer * 2) % 2 === 0) {
-      centerText(ctx, 'PRESS ANY KEY', 140, '#ffffff', 8);
+      centerText(ctx, 'PRESS ANY KEY', 140, '#ffffff', 1);
     }
     return;
   }
@@ -289,12 +274,21 @@ function drawOverlays(r, game, screenX, by) {
     return;
   }
 
+  if (game.phase === 'stageClear') {
+    const sc = game.stageClear;
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.fillRect(0, HUD_H, VIEW_W, GROUND_Y - HUD_H);
+    centerText(ctx, sc.isCourseEnd ? 'COURSE CLEAR' : 'STAGE CLEAR', 84, '#7fd8ff', 2);
+    centerText(ctx, `BONUS ${sc.paid}`, 110, '#ffe060', 1);
+    return;
+  }
+
   if (game.phase === 'gameOver') {
     ctx.fillStyle = 'rgba(0,0,0,0.55)';
     ctx.fillRect(0, HUD_H, VIEW_W, GROUND_Y - HUD_H);
-    centerText(ctx, 'GAME OVER', 96, '#ff5000', 16);
+    centerText(ctx, 'GAME OVER', 96, '#ff5000', 2);
     if (Math.floor(game.phaseTimer * 2) % 2 === 0) {
-      centerText(ctx, 'PRESS FIRE', 128, '#ffffff', 8);
+      centerText(ctx, 'PRESS FIRE', 128, '#ffffff', 1);
     }
   }
 }
@@ -333,7 +327,7 @@ export function render(r, game, alpha) {
   if (game.phase !== 'dying' && !blinkOff) drawBuggy(r, game, screenX, by);
 
   drawEntities(r, game, camX);
-  drawHud(r, game);
+  drawHUD(ctx, game, r.sprites);
   drawOverlays(r, game, screenX, by);
 
   r.screenCtx.clearRect(0, 0, r.screen.width, r.screen.height);
