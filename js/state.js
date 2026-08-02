@@ -12,7 +12,7 @@ import {
   CHECKPOINT_SPACING,
 } from './terrain.js';
 import { fireDual, updateWeapons } from './weapons.js';
-import { spawnDirector, updateEnemies } from './enemies.js';
+import { spawnDirector, updateEnemies, ENEMY_W } from './enemies.js';
 import { updatePowerups } from './powerups.js';
 import { startBoss, updateBoss, updateBossMotion } from './boss.js';
 import { mulberry32 } from './rng.js';
@@ -63,13 +63,6 @@ export const HIT_STOP_BOSS = 0.08;  // set below, AFTER the boss-down transition
 // keeps scrolling for the visual effect, but accel/brake/jump/fire are all
 // ignored (only updateBuggy's dt-driven movement/gravity runs).
 const NOOP_INPUT = { pressed: () => false };
-
-// Jump-over tank scoring needs the tank's collision width, which lives in
-// enemies.js as an unexported per-kind lookup (ENEMY_W.tank). Duplicated
-// here as a single constant rather than exporting that whole lookup table
-// just for one value — mirrors how enemies.js already mirrors buggy.js's
-// (unexported) CRATER_TYPES for the same reason.
-const TANK_W = 20;
 
 const JUMP_TAG_BY_TYPE = {
   crater: 'craterJump',
@@ -276,7 +269,7 @@ function scoreJump(game, jumpStartX, landX) {
 
   for (const e of game.enemies) {
     if (e.kind !== 'tank') continue;
-    if (e.x >= jumpStartX + BUGGY_W && e.x + TANK_W <= landX) {
+    if (e.x >= jumpStartX + BUGGY_W && e.x + ENEMY_W.tank <= landX) {
       award(game, SCORES.tankJump, 'tankJump');
     }
   }

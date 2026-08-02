@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { clampSpriteScreenX, consumeFx } from '../js/render.js';
 import { createParticles, emit, activeCount, pushFx } from '../js/particles.js';
-import { sweepOffsetAt } from '../js/boss.js';
+import { sweepOffsetAt, BOSS_W } from '../js/boss.js';
 import { buggyScreenX, VIEW_W, DT } from '../js/state.js';
 import { SPEED_BANDS } from '../js/buggy.js';
 
@@ -31,11 +31,10 @@ test('clampSpriteScreenX never asks for a negative width, even for a sprite wide
 });
 
 // The boss sprite (boss1/boss2) is documented as 48x15 (BUILD-LOG.md, the
-// FIGHT GEOMETRY / hitbox notes in boss.js). Mirrored here as a local
-// constant rather than imported: boss.js's BOSS_W is deliberately unexported
-// (it's an internal collision-box tunable), and render.js only ever learns
-// the width from the rasterized sprite image, which needs a real canvas.
-const BOSS_SPRITE_W = 48;
+// FIGHT GEOMETRY / hitbox notes in boss.js) and matches boss.js's exported
+// BOSS_W exactly (its collision box is sized off the real sprite). render.js
+// itself only ever learns the width from the rasterized sprite image, which
+// needs a real canvas, so this test uses the pure constant instead.
 
 test('the boss sweep stays fully on screen at every point of a full period, at every speed band', () => {
   // Reproduces render.js's drawBoss screen-x math exactly (sx = boss.x - camX
@@ -51,10 +50,10 @@ test('the boss sweep stays fully on screen at every point of a full period, at e
     let sawOffCanvasBeforeClamp = false;
     for (let t = 0; t <= SWEEP_PERIOD; t += SWEEP_PERIOD / 500) {
       const rawSx = sweepOffsetAt(t) + screenX;
-      if (rawSx < 0 || rawSx + BOSS_SPRITE_W > VIEW_W) sawOffCanvasBeforeClamp = true;
-      const sx = clampSpriteScreenX(Math.round(rawSx), BOSS_SPRITE_W);
+      if (rawSx < 0 || rawSx + BOSS_W > VIEW_W) sawOffCanvasBeforeClamp = true;
+      const sx = clampSpriteScreenX(Math.round(rawSx), BOSS_W);
       assert.ok(sx >= 0, `band ${speed}px/s, t=${t.toFixed(2)}: left edge on screen (sx=${sx})`);
-      assert.ok(sx + BOSS_SPRITE_W <= VIEW_W,
+      assert.ok(sx + BOSS_W <= VIEW_W,
         `band ${speed}px/s, t=${t.toFixed(2)}: right edge on screen (sx=${sx})`);
     }
     if (speed === SPEED_BANDS[0]) {

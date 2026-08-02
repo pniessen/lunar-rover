@@ -157,10 +157,13 @@ function buildSegmentFeatures(courseId, index, rng) {
     recipe = recipe.concat([extraTypes[Math.floor(rng() * extraTypes.length)]]);
   }
 
-  // No features in the first 200px of segment A, or the first 150px
-  // after any other checkpoint line — respawns must always be safe.
-  const minOffset = index === 0 ? 200 : 150;
-  const startOffset = Math.max(300, minOffset);
+  // Respawns must always land on clear road, so every segment keeps its
+  // first 300px feature-free (state.js's respawn() docstring cites this
+  // guarantee). This used to be Math.max(300, index === 0 ? 200 : 150) — a
+  // per-segment minOffset that never mattered, since both 200 and 150 are
+  // already <= 300 and Math.max always picked 300. Collapsed to the actual
+  // constant it always computed.
+  const startOffset = 300;
   return layoutRecipe(recipe, startOffset);
 }
 
@@ -202,8 +205,9 @@ function buildChunkFeatures(seed, chunkIndex) {
   const difficulty = chunkIndex * 0.15;
   const count = Math.min(6, 2 + Math.floor(difficulty));
   const types = chunkIndex >= 6 ? ENDLESS_TYPES_WITH_MINE : ENDLESS_TYPES_NO_MINE;
-  const minOffset = chunkIndex === 0 ? 200 : 150;
-  const startOffset = Math.max(300, minOffset);
+  // Same 300px clear-road guarantee as buildSegmentFeatures above (and the
+  // same collapsed-dead-conditional history — see that function's comment).
+  const startOffset = 300;
 
   let x = startOffset;
   const out = [];

@@ -12,7 +12,7 @@
 import { GROUND_Y } from './state.js';
 import { BUGGY_W } from './buggy.js';
 import { destroyFeature, featuresInRange } from './terrain.js';
-import { award } from './score.js';
+import { award, SCORES } from './score.js';
 import { pushFx } from './particles.js';
 
 export const SHOT_SPEED_FWD = 300; // px/s, relative to world; buggy speed is added on top
@@ -156,7 +156,7 @@ function collideShots(game) {
     // Shot is consumed on impact regardless of whether the feature survives.
     const result = destroyFeature(terrain, hit.id);
     if (result.destroyed) {
-      award(game, 100, 'rockShot');
+      award(game, SCORES.rockShot, 'rockShot');
       game.events.push('explosion');
       // Visual twin of the audio event, carrying the position game.events
       // cannot (see particles.js): centered on the destroyed feature, a

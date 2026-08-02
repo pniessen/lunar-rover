@@ -178,7 +178,7 @@ const SWEEP_PERIOD = 4.2;  // seconds for one full out-and-back sweep
 // mothership unhittable and its bottom rows lying about where it could be
 // hit), plus a small symmetric forgiveness pad in the player's favor. The pad
 // mirrors the ±4px margins already used elsewhere for shot-vs-feature hits.
-const BOSS_W = 48;
+export const BOSS_W = 48;
 const BOSS_H = 15;
 const BOX_PAD_X = 2;
 const BOX_PAD_Y = 3;

@@ -15,7 +15,7 @@ import {
   GRAVITY, BUGGY_W, BUGGY_H, killBuggy, buggyHitbox,
 } from './buggy.js';
 import { featuresInRange, addBombCrater } from './terrain.js';
-import { award } from './score.js';
+import { award, SCORES } from './score.js';
 import { spawnCapsule } from './powerups.js';
 import { pushFx } from './particles.js';
 
@@ -45,8 +45,9 @@ const TANK_SHOT_SPEED = 160;    // px/s
 
 // Approximate collision footprints, keyed by kind — the enemy shape itself
 // carries no width/height field, so collision code uses this lookup instead
-// (mirrors each kind's sprite dimensions in sprites.js).
-const ENEMY_W = {
+// (mirrors each kind's sprite dimensions in sprites.js). Exported so state.js
+// can single-source ENEMY_W.tank rather than redefining its own TANK_W.
+export const ENEMY_W = {
   swooper: 16, aimer: 16, bomber: 14, tank: 20, chaser: 14,
 };
 const ENEMY_H = {
@@ -483,18 +484,20 @@ export function hitEnemy(game, enemy) {
 
   switch (enemy.kind) {
     case 'swooper':
-      award(game, 100, 'swooper');
+      award(game, SCORES.swooper, 'swooper');
       break;
     case 'aimer':
-      award(game, 100, 'aimer');
+      award(game, SCORES.aimer, 'aimer');
       break;
     case 'bomber':
-      award(game, 200, 'bomber');
+      award(game, SCORES.bomber, 'bomber');
       break;
     case 'tank':
-      award(game, 200, 'tankShot');
+      award(game, SCORES.tankShot, 'tankShot');
       break;
     case 'chaser': {
+      // No SCORES entry: this is a randomized payout (not a fixed per-kind
+      // value), so there is nothing in the table to route through.
       const pool = [500, 800, 1000];
       award(game, pool[Math.floor(game.waveRng() * pool.length)], 'chaser');
       break;
@@ -506,7 +509,7 @@ export function hitEnemy(game, enemy) {
   if (enemy.formationId) {
     const remaining = game.enemies.some((e) => e.formationId === enemy.formationId);
     if (!remaining) {
-      award(game, 1000, 'formation');
+      award(game, SCORES.formation, 'formation');
       // 40% chance a formation wipe also drops a power-up capsule, falling
       // from the position of the last enemy killed. game.waveRng is the
       // only permitted randomness source, per project convention.

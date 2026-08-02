@@ -1,0 +1,15 @@
+# Agent scratch (task briefs, reviews, progress ledgers, review diffs) —
+# never part of the shipped game. See docs/BUILD-LOG.md's "Session/process
+# facts" section.
+.superpowers/
+
+# OS cruft
+.DS_Store
+
+# In case a future session installs local tooling — no package.json exists
+# today (zero-dependency, zero-build-step project), but if that changes this
+# keeps node_modules/ out of version control.
+node_modules/
+
+# NOTE: .claude/launch.json is tracked and wanted (dev-server config) — do
+# not add a blanket .claude/ ignore here.

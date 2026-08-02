@@ -184,27 +184,6 @@ export const SPRITES = {
     ],
   },
 
-  // 10x14 stranded astronaut, arms raised.
-  astronaut: {
-    palette: { o: '#20202c', w: '#ffffff', c: '#7fd8ff' },
-    map: [
-      '...owwo...',
-      '..owccwo..',
-      '..owccwo..',
-      '...owwo...',
-      'ow..ww..wo',
-      '.owwwwwwo.',
-      '.owwccwwo.',
-      '.owwccwwo.',
-      '.owwwwwwo.',
-      '..owwwwo..',
-      '..owwwwo..',
-      '..ow..wo..',
-      '..ow..wo..',
-      '.oww..wwo.',
-    ],
-  },
-
   crater: { palette: CRATER_PAL, map: craterMap(24, 16) },
   bigCrater: { palette: CRATER_PAL, map: craterMap(40, 22) },
   doubleCrater: { palette: CRATER_PAL, map: doubleCraterMap() },

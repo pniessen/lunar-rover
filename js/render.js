@@ -3,7 +3,7 @@
 // writes to it.
 
 import { buildSprites, rasterize, MOUNTAIN_FAR_MAP, MOUNTAIN_NEAR_MAP } from './sprites.js';
-import { featuresInRange } from './terrain.js';
+import { featuresInRange, FEATURE_W } from './terrain.js';
 import {
   buggyScreenX, DT, DYING_TIME, VIEW_W, VIEW_H, GROUND_Y, HUD_H, INITIALS_LEN,
 } from './state.js';
@@ -352,14 +352,14 @@ function drawTerrain(r, game, pal, camX) {
 // A bomb holds a fixed world column while the camera scrolls past it, so its
 // x IS the left edge of the bombCrater it will open (see enemies.js's
 // resolveBombImpacts -> terrain.js's addBombCrater, which uses the same x and
-// FEATURE_W.bombCrater = 28). The bracket therefore sits exactly on the
-// footprint the player has to jump, at ground level where their eyes already
-// are, instead of asking them to track a 8px dot falling from the top of the
-// screen while also reading the mothership's telegraph flash.
+// width). The bracket therefore sits exactly on the footprint the player has
+// to jump, at ground level where their eyes already are, instead of asking
+// them to track a 8px dot falling from the top of the screen while also
+// reading the mothership's telegraph flash.
 //
 // Presentation only: derived entirely from game.enemyShots and r.tick, writes
 // nothing back to game, so the simulation stays bit-identical and headless.
-const BOMB_MARK_W = 28;    // == FEATURE_W.bombCrater, the footprint it predicts
+const BOMB_MARK_W = FEATURE_W.bombCrater; // the footprint it predicts — imported so it can't drift
 const BOMB_MARK_FALL = 130; // px of fall the "closeness" ramp is scaled over
 
 function drawBombMarkers(r, game, camX) {
