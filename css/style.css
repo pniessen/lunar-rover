@@ -39,8 +39,11 @@ html, body {
   image-rendering: crisp-edges;
 }
 
-/* Touch controls: hidden until input.js detects a touchstart and adds
-   the 'touch' class to <body>. */
+/* Touch controls: hidden until input.js adds the 'touch' class to <body>,
+   which it does at boot on any touch-capable device (plus a window-level
+   first-touch fallback). It must NOT wait for a touchstart on the controls
+   themselves — a display:none element is never hit-tested, so that would
+   deadlock and the controls could never appear. See input.js. */
 #touch-ui {
   display: none;
   position: absolute;
@@ -101,6 +104,32 @@ body.touch #touch-ui {
 #btn-jump:active,
 #btn-fire:active {
   background: rgba(255, 255, 255, 0.35);
+}
+
+/* Restart (touch stand-in for the R key). Deliberately small, dimmed, and
+   parked in the TOP-right corner — diagonally opposite the speed zone (left
+   40%) and well clear of the bottom-row thumb buttons — because an accidental
+   hit wipes a live run. state.js's restartRun() is a no-op outside a live run,
+   so a stray tap on the attract/game-over screens costs nothing. */
+#btn-restart {
+  position: absolute;
+  top: calc(12px + env(safe-area-inset-top, 0px));
+  right: calc(12px + env(safe-area-inset-right, 0px));
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.7);
+  font: bold 14px monospace;
+  pointer-events: auto;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#btn-restart:active {
+  background: rgba(255, 255, 255, 0.3);
+  color: #fff;
 }
 
 /* Portrait prompt. The game's 384x240 buffer is 8:5, so a portrait phone

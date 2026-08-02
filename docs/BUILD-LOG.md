@@ -56,7 +56,7 @@ The fix wave (`ef1f38e`, `4bd6f68`) redesigned the fight: deterministic sweep (`
 
 ## Testing conventions
 
-- Run with `node --test tests/*.test.js` — the bare `node --test tests/` form misbehaves on this machine's Node v26. 209 tests, all green.
+- Run with `node --test tests/*.test.js` — the bare `node --test tests/` form misbehaves on this machine's Node v26. 251 tests, all green.
 - Terrain test doubles: any collision consumer honors `terrain.mode === 'test'` with a bare `features` array.
 - **The load-bearing lesson of this project:** hand-placed projectiles test collision predicates, not gameplay. Any claim that "X can be shot/reached/collected" needs a **real-path reachability test** — a bot that only calls `input.pressed()` driving `updateGame` end to end. Patterns to copy: `playerBot`/`fightWithBot` in `tests/boss.test.js` (~line 1146) and the REACHABILITY tests at the end of `tests/enemies.test.js` (seeded first waves: seed 5 → aimer pair, seed 6 → swooper formation; mutation-verified against removing the up-shot speed carry).
 - Reviewers on this project reproduced bugs empirically (worktree checkouts of pre-fix commits, standalone repro scripts) rather than trusting reports — keep that bar.
@@ -68,7 +68,7 @@ The fix wave (`ef1f38e`, `4bd6f68`) redesigned the fight: deterministic sweep (`
 3. ~~Boss bomb carpet falls entirely off-screen~~ — **fixed in the boss-polish pass** (see below).
 4. ~~Cosmetics: boss clips ~4px off-canvas at band-0 sweep extreme; particles/shake animate during pause; boss freezes mid-air during death then snaps on resume; `hud.js` `hudTime += DT` per draw couples blink rate to refresh rate~~ — **fixed in the cosmetic-polish pass** (see below). Remaining cosmetic item: per-frame `loadScores()` JSON.parse.
 5. ~~Code-quality deferred: score literals in `weapons.js`/`enemies.js` not sourced from `SCORES`; `TANK_W` duplicated in `state.js`; unused `astronaut` sprite; dead `minOffset` conditional in `terrain.js`; hardcoded `BOMB_MARK_W`/unexported `BOSS_W`; mine/boss-telegraph/bomb-marker flash still animated during pause; no `.gitignore`~~ — **fixed in the code-quality pass** (see below), except `scoreEvents` unbounded growth, deliberately left — see that section.
-6. **Never verified on a real touch device** — touch logic is code-reviewed + viewport-tested only.
+6. ~~**Never verified on a real touch device** — touch logic is code-reviewed + viewport-tested only.~~ — this hid a **dead-on-arrival bug**: the controls could never appear at all. Fixed in the touch-controls pass (see below). Still not exercised on physical hardware, but now covered by unit tests plus a headless-Chromium touch-emulation harness.
 7. **Watch item — one unreproduced flaky test.** `ROLLING ARENA: bomb craters survive...` failed exactly once, mid-session, during the cosmetic-polish pass, and never again: ~185 subsequent attempts (isolated loops + full-suite runs, across both the live tree and a pristine `git worktree` pinned to the commit) all passed. Ruled out by direct inspection: module-level mutable state, wall-clock time, unseeded randomness — the whole path is seeded and per-`game`/per-`terrain`. Unconfirmed hypothesis: the crater-pass check (`mid < rec.x + 28`) and `sweepOffsetAt`'s `Math.sin` are float-boundary-sensitive over long accumulated `+= dt` sequences, and V8 JIT tier-up for `Math.sin` can shift ULP-level results depending on call history — which would be execution-order dependent and fits a once-ever flake. **This test guards a load-bearing invariant** (if bomb craters get swept, the boss's entire attack is erased), so if it ever fails again, treat it as real and chase the float boundary rather than re-running until green.
 8. **`tankJump` scoring may be unreachable** (`js/state.js`, `SCORES.tankJump = 100`). Surfaced by the code-quality review: jump hang time is fixed at ~1.0s (`JUMP_VY=-170`, `GRAVITY=340`) while a tank moves at `0.8 × game.speed`, so relative closing distance during a jump tops out near 40px against the ~52px (`BUGGY_W + ENEMY_W.tank`) needed to clear one — meaning it likely requires a hover power-up. Untested and possibly dead reward code. **Same class as the two unreachability bugs already fixed** (the unhittable boss, the unkillable aimers): a reward the geometry never lets you earn. Verify with a real-path test before deciding whether to retune or delete.
 
@@ -252,6 +252,49 @@ case rather than assuming it.
   was verified live in-browser instead, matching how the rest of the
   presentation layer — `main.js`, `sprites.js`'s `rasterize` — is already
   excluded from `node --test` coverage for the same reason).
+
+## Touch-controls pass (2026-08-02, post-v1)
+
+Reported as "the mobile controls don't seem to be working." They weren't —
+not intermittently, but in every state, by construction.
+
+- **Root cause: a chicken-and-egg deadlock.** `#touch-ui` was `display: none`
+  until `<body>` got the `touch` class, and the *only* code that added that
+  class was `markTouchActive()`, called from the `touchstart` handlers bound
+  to `#btn-jump`, `#btn-fire`, and `#zone-speed` — all children of `#touch-ui`.
+  A `display: none` element is never hit-tested, so those handlers could never
+  fire, so the class was never added, so the layer stayed hidden. No touch
+  input could ever reach the game.
+- **Fix: answer "is this a touch device?" up front** instead of inferring it
+  from a touch that cannot happen. `input.js` now calls `markTouchActive()` at
+  boot when `navigator.maxTouchPoints > 0 || 'ontouchstart' in window`, so the
+  first tap lands on a real button rather than being spent unhiding one. A
+  self-removing `window`-level capture-phase `touchstart` listener is the
+  belt-and-braces path for devices whose capability flags lie — bound on the
+  window precisely because the controls themselves are un-hittable until it
+  runs. A mouse-only desktop fails both and correctly gets no overlay.
+- **`input.js` is now testable.** It grew an injectable `env` of `{win, doc}`
+  (defaulting to the real globals), mirroring the `contextFactory` seam
+  `audio.js` already uses for `AudioContext`. It references no other global,
+  so those two handles plus a fake `touchRoot` are the whole shim.
+- **`tests/input.test.js` — 28 tests, the module's first coverage ever.** That
+  gap is why this shipped: `input.js` was the one module with no tests. Covers
+  boot-time activation, the window-level fallback and its self-removal, the
+  mouse-only negative case, speed-zone halves / held-touch edge suppression /
+  midline slides / multi-touch, momentary buttons, sub-frame taps, and
+  non-passive registration. Mutation-verified: disabling the reveal paths
+  fails 3 tests including the explicitly-named REGRESSION one.
+- **Restart button added** (`#btn-restart`, the touch stand-in for `R`). `P`,
+  `M`, `N`, `B`, and `C` stay keyboard-only, keeping the on-screen layout
+  minimal per the original Task-14 decision. It is small (44px), dimmed, and
+  parked in the *top*-right — diagonally opposite the speed zone and clear of
+  the bottom thumb row — because an accidental hit wipes a live run.
+- **Verified in a real browser**, not just against the fake DOM: a headless
+  Chromium harness (scratch, not committed) at 812×375 landscape with
+  `hasTouch` asserts the class lands at boot, the overlay is visible, all four
+  controls are the topmost element at their own centres, and raw CDP touch
+  dispatch drives real held/dragged/two-finger gestures through to the input
+  state. 26 checks, all green; the mouse-only context correctly gets nothing.
 
 ## Ideas that came up but were never scoped
 
