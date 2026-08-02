@@ -7,10 +7,10 @@
 //   { features: Feature[] (x-sorted), nextId, generatedTo, mode, courseId?, seed? }
 // A `Feature` looks like: { id, type, x, w, hp, destroyed }
 //
-// Design note for future Task 12 (`clearZone(terrain, x0, x1)`): features
+// Design note for `clearZone(terrain, x0, x1)` (Task 12, below): features
 // live in a flat, x-sorted array keyed by stable numeric `id`, so removing
-// or destroying every feature whose range overlaps [x0,x1) is a simple
-// filter/scan — no separate per-segment bookkeeping to unwind.
+// every feature whose range overlaps [x0,x1) is a simple filter/scan — no
+// separate per-segment bookkeeping to unwind.
 
 import { mulberry32 } from './rng.js';
 
@@ -277,6 +277,18 @@ export function addBombCrater(terrain, x) {
   terrain.features.push(feature);
   terrain.features.sort((a, b) => a.x - b.x);
   return feature;
+}
+
+/**
+ * clearZone(terrain, x0, x1) — removes every feature overlapping [x0, x1)
+ * outright (rather than merely marking it `destroyed`), so a boss arena
+ * (Task 12) is guaranteed free of both live and rubble hazards — a
+ * `destroyed` feature still occupies a slot `featuresInRange` would return,
+ * which callers elsewhere (e.g. jump-over scoring) treat specially, so a
+ * clean removal is the least surprising way to guarantee "nothing here."
+ */
+export function clearZone(terrain, x0, x1) {
+  terrain.features = terrain.features.filter((f) => !(f.x < x1 && f.x + f.w > x0));
 }
 
 export function destroyFeature(terrain, id) {

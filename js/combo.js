@@ -132,23 +132,28 @@ export function resetCombo(game) {
  * lengths, discarding (not counting) anything logged since the last time
  * they were consumed. This is the single mechanism that keeps "death is a
  * clean slate" true end-to-end: updateCombo only ever runs while
- * game.phase === 'playing', but weapons/enemies keep scoring and eventing
- * through the *entire* frozen window a death opens up — 'dying' (shots
- * already in flight still fly and can still kill something) and
+ * game.phase is 'playing' or (as of Task 12) 'boss' — bosses build combo
+ * live just like regular play — but weapons/enemies keep scoring and
+ * eventing through the *entire* frozen window a death opens up — 'dying'
+ * (shots already in flight still fly and can still kill something) and
  * 'respawning' (invulnerable but drivable, so a jump can land and clear a
  * crater mid-blink-in) — not just the single instant killBuggy() fires. A
  * cursor fast-forward at death alone (the previous, insufficient fix) still
  * leaves that whole window's worth of scoreEvents/events unconsumed, which
  * would otherwise get replayed as a lump of posthumous combo actions the
- * instant 'playing' resumes.
+ * instant play resumes.
  *
  * Call this exactly once, at the point a frozen-combo phase transitions
- * back into 'playing': state.js does so at respawning->playing (covers the
- * dying+respawning window) and stageClear->playing (belt-and-suspenders —
- * stageClear's own tally is already tag-excluded and nothing else can score
- * during it, but this keeps the invariant "every non-'playing' phase is a
- * clean slate on the way back in" true uniformly, including for 'boss' once
- * a later task wires that phase up the same way).
+ * back into 'playing' or 'boss': state.js does so at respawning->playing/
+ * boss (covers the dying+respawning window, whichever phase it resumes
+ * into) and stageClear->playing. stageClear's own tally is already
+ * tag-excluded and nothing else can score during it, so that second call is
+ * belt-and-suspenders — except for a boss fight that ends via bossDown: the
+ * frame the boss dies breaks out of the 'boss' case before updateCombo runs
+ * (see state.js), so that frame's final bossHit/bossKill scoreEvents are
+ * exactly the kind of "logged but never consumed" entries this function
+ * exists to discard, and the stageClear->playing call is what actually
+ * catches them.
  */
 export function syncComboCursors(game) {
   const combo = game.combo;

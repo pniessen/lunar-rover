@@ -83,8 +83,8 @@ export function applyPowerup(game, type) {
  * called; collection is additionally gated to 'playing'/'respawning' (a
  * capsule collected mid-death or mid-intermission would be a confusing
  * freebie). The active power-up's remaining-time countdown only ticks
- * during 'playing' — this mirrors the combo timer's phase gating in
- * state.js (frozen during stageClear/dying/respawning/boss) and matches the
+ * during 'playing' — this function is never even called during 'boss' (see
+ * below), so a boss fight simply can't tick it either — and matches the
  * shield's existing "duration" of Infinity: it can only ever end by being
  * consumed in killBuggy, never by a clock.
  *

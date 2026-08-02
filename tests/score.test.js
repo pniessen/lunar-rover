@@ -142,7 +142,14 @@ test('crossing checkpoint 1 sets game.checkpoint and emits a checkpoint event', 
   assert.ok(g.events.includes('checkpoint'));
 });
 
-test('crossing a STAGE_BREAKS checkpoint triggers stageClear, pays the tally, then resumes playing with stage incremented', () => {
+// CHANGED for Task 12: every STAGE_BREAKS checkpoint (E/J/O/T/Z) now diverts
+// into a 'boss' fight instead of straight into 'stageClear' — see boss.js
+// and state.js's enterBoss/updateGame's 'boss' case. This test now fights
+// (one-shot-kills, via a forced low-hp + an overlapping player shot so the
+// state.js's bossWasAlive->null transition detection sees it) through that
+// boss before the stageClear tally can be observed; everything downstream
+// of stageClear (the ticking tally, the stage increment) is unchanged.
+test('crossing a STAGE_BREAKS checkpoint triggers a boss fight, then stageClear, then resumes playing with stage incremented', () => {
   const g = createGame('classic', 1);
   g.phase = 'playing';
   g.terrain = { mode: 'test', features: [] };
@@ -151,10 +158,20 @@ test('crossing a STAGE_BREAKS checkpoint triggers stageClear, pays the tally, th
   const breakIdx = STAGE_BREAKS[0];
   g.buggy.worldX = checkpointX(breakIdx) - 1;
 
-  stepUntilPhaseChanges(g); // playing -> stageClear
-  assert.equal(g.phase, 'stageClear');
+  stepUntilPhaseChanges(g); // playing -> boss
+  assert.equal(g.phase, 'boss');
   assert.equal(g.checkpoint, breakIdx);
+  assert.ok(g.boss);
+  assert.equal(g.boss.maxHp, 12, 'stage-0 boss (break E) has 12hp');
+
+  g.boss.hp = 1;
+  g.playerShots = [{ x: g.boss.x + 10, y: g.boss.y + 5, vx: 300, vy: 0, dir: 'fwd' }];
+  stepUntilPhaseChanges(g); // boss -> stageClear
+
+  assert.equal(g.phase, 'stageClear');
+  assert.equal(g.boss, null);
   assert.ok(g.stageClear);
+  assert.ok(g.scoreEvents.some((ev) => ev.tag === 'bossKill'), 'the boss kill was scored');
   const expectedTotal = g.stageClear.total;
   const scoreAtEntry = g.score;
 
@@ -178,15 +195,29 @@ function seedEntitiesNear(g, worldX) {
   g.playerShots = [{ x: worldX, y: 0, vx: 1, vy: 0, dir: 'fwd' }];
 }
 
+// CHANGED for Task 12: Z is now the final two-phase boss (40hp) rather than
+// a direct stageClear entry — see boss.js/state.js's enterBoss. This test
+// force-kills that boss (same one-shot technique as the STAGE_BREAKS test
+// above) before observing the course-end stageClear/rollover, which is
+// otherwise unchanged.
 test('crossing Z promotes to the champion course and clears stale entities', () => {
   const g = createGame('classic', 1);
   g.phase = 'playing';
   g.terrain = { mode: 'test', features: [] };
+  g.stage = 4; // real play reaches Z only after E/J/O/T bumped stage to 4
   g.buggy.worldX = checkpointX(Z_IDX) - 1;
   seedEntitiesNear(g, g.buggy.worldX + 50);
   g.waveTimer = 3; // simulate an in-progress wave timer from the old lap
 
-  stepUntilPhaseChanges(g); // playing -> stageClear
+  stepUntilPhaseChanges(g); // playing -> boss
+  assert.equal(g.phase, 'boss');
+  assert.ok(g.boss);
+  assert.equal(g.boss.maxHp, 40, 'the Z break is the final two-phase boss');
+  assert.equal(g.boss.isFinal, true);
+
+  g.boss.hp = 1;
+  g.playerShots = [{ x: g.boss.x + 10, y: g.boss.y + 5, vx: 300, vy: 0, dir: 'fwd' }];
+  stepUntilPhaseChanges(g); // boss -> stageClear
   assert.equal(g.phase, 'stageClear');
   assert.ok(g.stageClear.isCourseEnd);
 
@@ -204,15 +235,24 @@ test('crossing Z promotes to the champion course and clears stale entities', () 
   assert.equal(g.waveTimer, undefined, 'wave timer resets so the new lap spawns fresh');
 });
 
+// CHANGED for Task 12: same as above — Z routes through the final boss
+// every time it's crossed, including on a loop of the champion course.
 test('crossing Z again on the champion course loops it and still clears stale entities', () => {
   const g = createGame('classic', 1);
   g.phase = 'playing';
   g.courseId = 1;
   g.terrain = { mode: 'test', features: [], courseId: 1 };
+  g.stage = 4; // real play reaches Z only after E/J/O/T bumped stage to 4
   g.buggy.worldX = checkpointX(Z_IDX) - 1;
   seedEntitiesNear(g, g.buggy.worldX + 50);
 
-  stepUntilPhaseChanges(g); // playing -> stageClear
+  stepUntilPhaseChanges(g); // playing -> boss
+  assert.equal(g.phase, 'boss');
+  assert.ok(g.boss);
+
+  g.boss.hp = 1;
+  g.playerShots = [{ x: g.boss.x + 10, y: g.boss.y + 5, vx: 300, vy: 0, dir: 'fwd' }];
+  stepUntilPhaseChanges(g); // boss -> stageClear
   assert.equal(g.phase, 'stageClear');
   assert.ok(g.stageClear.isCourseEnd);
 

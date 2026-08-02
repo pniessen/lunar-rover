@@ -479,17 +479,22 @@ export function hitEnemy(game, enemy) {
 }
 
 /**
- * updateEnemies(game, dt) — call every frame while 'playing', 'dying', or
- * 'respawning' (enemies keep flying/rolling/shooting through a death, only
- * the buggy-collision checks below are gated to 'playing' — mirroring the
- * `invulnerable` gating updateDrive applies during 'respawning').
+ * updateEnemies(game, dt) — call every frame while 'playing', 'boss',
+ * 'dying', or 'respawning' (enemies keep flying/rolling/shooting through a
+ * death, only the buggy-collision checks below are gated to 'playing'/
+ * 'boss' — mirroring the `invulnerable` gating updateDrive applies during
+ * 'respawning'). The 'boss' gate exists so a boss's own bombs/aimed shots —
+ * pushed into this same game.enemyShots list by boss.js — can actually hit
+ * the buggy; game.enemies itself is expected to be empty during a boss
+ * fight (spawnDirector is paused), so collideEnemiesVsBuggy's chaser/tank
+ * ram checks are a no-op there in practice.
  */
 export function updateEnemies(game, dt) {
   for (const e of game.enemies) updateOneEnemy(game, e, dt);
 
   moveEnemyShots(game, dt);
 
-  if (game.phase === 'playing') {
+  if (game.phase === 'playing' || game.phase === 'boss') {
     collideEnemiesVsBuggy(game);
     collideEnemyShotsVsBuggy(game);
   }

@@ -434,6 +434,30 @@ export const SPRITES = {
     ],
   },
 
+  // 48x15 mothership — final-boss (Z) recolor of boss1, same silhouette so
+  // it reads instantly as "the same kind of thing, but meaner": cool
+  // cyan/white swapped for hot red/gold, signaling the two-phase finale.
+  boss2: {
+    palette: { c: '#ff6a4a', w: '#ffe0a0', m: '#7a2030', d: '#2a0a12', y: '#ffd020', k: '#20242e', r: '#ff2010' },
+    map: [
+      '..................cccccccccccc..................',
+      '...............dcccwwwwwwwwwwcccd...............',
+      '............dccccwwwwwwwwwwwwwwccccd............',
+      '.........ddmmmmccccwwwwwwwwwwccccmmmmdd.........',
+      '....ddmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmdd....',
+      '.ddmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmdd.',
+      'dmyymmyymmyymmyymmyymmyymmyymmyymmyymmyymmyymmyd',
+      'dmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmd',
+      '.dmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmd.',
+      '....dmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmd....',
+      '........dmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmd........',
+      '............dkkkkkkkkkkkkkkkkkkkkkkd............',
+      '................drrrrrrrrrrrrrrd................',
+      '....................drrrrrrd....................',
+      '......................drrd......................',
+    ],
+  },
+
   // Explosions are authored at half resolution and rasterized 2x so the
   // debris reads as chunky arcade blocks rather than fine noise.
   explosion0: {

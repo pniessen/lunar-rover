@@ -252,6 +252,34 @@ function drawEntities(r, game, camX) {
   }
 }
 
+// Draws the active stage-break boss (Task 12): the mothership sprite
+// (boss2's hot-red recolor for the Z final boss, boss1 otherwise), a
+// flicker while game.boss.telegraph>0 signaling an attack is about to
+// fire, and a thin hp bar (green, red once phase2 kicks in) under it.
+function drawBoss(r, game, camX) {
+  const boss = game.boss;
+  if (!boss) return;
+  const { ctx, sprites } = r;
+  const img = sprites[boss.isFinal ? 'boss2' : 'boss1'] || sprites.boss1;
+  if (!img) return;
+
+  const sx = Math.round(boss.x - camX);
+  const sy = Math.round(boss.y);
+
+  const flashing = boss.telegraph > 0 && Math.floor(r.tick / 4) % 2 === 0;
+  ctx.globalAlpha = flashing ? 0.45 : 1;
+  ctx.drawImage(img, sx, sy);
+  ctx.globalAlpha = 1;
+
+  const barW = img.width;
+  const barY = sy - 6;
+  const pct = Math.max(0, Math.min(1, boss.hp / boss.maxHp));
+  ctx.fillStyle = '#20141c';
+  ctx.fillRect(sx, barY, barW, 3);
+  ctx.fillStyle = boss.phase2 ? '#ff4030' : '#60e060';
+  ctx.fillRect(sx, barY, Math.round(barW * pct), 3);
+}
+
 function drawOverlays(r, game, screenX, by) {
   const { ctx, sprites } = r;
 
@@ -327,6 +355,7 @@ export function render(r, game, alpha) {
   if (game.phase !== 'dying' && !blinkOff) drawBuggy(r, game, screenX, by);
 
   drawEntities(r, game, camX);
+  drawBoss(r, game, camX);
   drawHUD(ctx, game, r.sprites);
   drawOverlays(r, game, screenX, by);
 

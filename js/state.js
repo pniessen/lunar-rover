@@ -8,11 +8,12 @@ import {
 } from './buggy.js';
 import {
   buildClassicCourse, createEndlessTerrain, ensureGenerated,
-  checkpointIndexAt, checkpointX, featuresInRange, STAGE_BREAKS,
+  checkpointIndexAt, checkpointX, featuresInRange, clearZone, STAGE_BREAKS,
 } from './terrain.js';
 import { fireDual, updateWeapons } from './weapons.js';
 import { spawnDirector, updateEnemies } from './enemies.js';
 import { updatePowerups } from './powerups.js';
+import { startBoss, updateBoss } from './boss.js';
 import { mulberry32 } from './rng.js';
 import {
   award, featuresJumped, stageBonus, SCORES, STAGE_PAR, COURSE_BONUS,
@@ -25,6 +26,7 @@ export const DT = 1 / 60;          // fixed simulation timestep, seconds
 export const DYING_TIME = 0.9;     // explosion hold before the respawn
 export const RESPAWN_TIME = 1.0;   // invulnerable blink-in, buggy already drivable
 export const STAGE_CLEAR_TIME = 2.5; // scripted intermission while the stage bonus tallies
+export const BOSS_ARENA_LEN = 1600;  // px of terrain cleared ahead of a stage-break checkpoint
 export const VIEW_W = 384;
 export const VIEW_H = 240;
 export const GROUND_Y = 200;       // top of the terrain strip
@@ -185,7 +187,7 @@ function updateDrive(game, input, dt, invulnerable) {
     game.checkpoint = cp;
     game.events.push('checkpoint');
     if (!invulnerable && STAGE_BREAKS.includes(cp)) {
-      enterStageClear(game, cp);
+      enterBoss(game, cp);
     }
   }
 
@@ -199,6 +201,24 @@ function updateDrive(game, input, dt, invulnerable) {
     setPhase(game, 'dying');
     resetCombo(game);
   }
+}
+
+/**
+ * Diverts a stage-break checkpoint crossing (E/J/O/T/Z — every entry in
+ * STAGE_BREAKS, as of Task 12) into the 'boss' phase instead of straight
+ * into 'stageClear'. Carves a BOSS_ARENA_LEN-px arena out of the terrain
+ * starting at the checkpoint line (clearZone) so the fight is a fair
+ * dodge-and-shoot duel — no pre-placed craters/rocks/mines, just whatever
+ * the boss itself drops (bombCarpet's bombs still crater the ground on
+ * impact, same as a regular bomber's). The stageClear tally itself still
+ * happens — see the 'boss' case in updateGame, which calls enterStageClear
+ * once the boss's hp hits 0 — this just delays it behind the fight.
+ */
+function enterBoss(game, checkpointIdx) {
+  const arenaStart = checkpointX(checkpointIdx);
+  clearZone(game.terrain, arenaStart, arenaStart + BOSS_ARENA_LEN);
+  startBoss(game);
+  setPhase(game, 'boss');
 }
 
 /**
@@ -304,10 +324,12 @@ export function updateGame(game, input, dt) {
     case 'playing':
       game.stageTime += dt; // stage clock runs only during live play
       updateDrive(game, input, dt, false);
-      // updateDrive may have entered 'stageClear' this frame (a stage-break
-      // checkpoint just crossed) — the scripted intermission owns the rest
-      // of this frame instead of the usual playing-phase systems.
-      if (game.phase === 'stageClear') break;
+      // updateDrive may have entered 'boss' this frame (a stage-break
+      // checkpoint just crossed — every STAGE_BREAKS entry now diverts into
+      // a boss fight rather than straight into 'stageClear') — either way,
+      // that phase owns the rest of this frame instead of the usual
+      // playing-phase systems.
+      if (game.phase === 'boss' || game.phase === 'stageClear') break;
       spawnDirector(game, dt);
       updateEnemies(game, dt);
       if (input.pressed('fire')) fireDual(game);
@@ -329,8 +351,9 @@ export function updateGame(game, input, dt) {
       // phase still being 'playing' so a same-frame death (which already
       // called resetCombo above) doesn't immediately re-tick the timer;
       // this also means the combo timer is frozen (does not tick down)
-      // during stageClear/dying/respawning/boss — only 'playing' frames
-      // advance it.
+      // during stageClear/dying/respawning — only 'playing' and (as of
+      // Task 12) 'boss' frames advance it; see the 'boss' case below for
+      // why a boss fight builds combo just like regular play.
       if (game.phase === 'playing') updateCombo(game, dt);
       break;
 
@@ -368,7 +391,10 @@ export function updateGame(game, input, dt) {
       // only, mirroring the combo timer's phase gating above.
       updatePowerups(game, dt);
       if (game.phaseTimer >= RESPAWN_TIME) {
-        setPhase(game, 'playing');
+        // A death mid-boss-fight (game.boss survives dying/respawning
+        // untouched — see the 'boss' case below) resumes the fight rather
+        // than dropping back to plain 'playing'.
+        setPhase(game, game.boss ? 'boss' : 'playing');
         // Discard anything scored/evented across the whole dying+respawning
         // window (see syncComboCursors' docstring) — a death is a clean
         // slate, not a lump of free combo the instant play resumes.
@@ -391,9 +417,62 @@ export function updateGame(game, input, dt) {
       }
       break;
 
-    case 'boss':
-      // Recognized phase with no behavior yet (Task 10).
+    case 'boss': {
+      // Stage-break mothership fight (Task 12). The buggy drives/jumps/
+      // fires exactly as in 'playing' — spawnDirector is the only system
+      // withheld (no regular enemy waves during a boss fight); terrain
+      // collision stays active via updateDrive (the arena was cleared by
+      // enterBoss, so the only hazards are craters the boss's own bombs
+      // leave behind on impact, via the normal bomb-vs-terrain path in
+      // enemies.js's updateEnemies).
+      game.stageTime += dt; // time bonus stays meaningful through a boss fight
+      updateDrive(game, input, dt, false);
+      if (game.phase !== 'boss') break; // a terrain hit above already moved us to 'dying'
+
+      updateEnemies(game, dt); // moves/culls the boss's bombs & aimed shots (game.enemyShots)
+
+      // bossWasAlive/game.boss-after comparison, not a 'bossDown' events
+      // scan: game.events is a whole-run log only main.js clears, so an
+      // includes() check here could match a stale event from many frames
+      // ago. A before/after null check on this exact call is unambiguous.
+      const bossWasAlive = !!game.boss;
+      updateBoss(game, dt); // pattern machine + player-shot-vs-boss + hitBoss/bossDown
+      if (bossWasAlive && !game.boss) {
+        // The boss just died this frame: hitBoss() already paid bossKill,
+        // dropped the guaranteed capsule, and pushed 'bossDown'. Resume the
+        // exact same stageClear tally flow a non-boss break used to enter
+        // directly — game.checkpoint is still the break index (E/J/O/T/Z)
+        // that started this fight, so isCourseEnd/COURSE_BONUS/champion
+        // handling all fall out of enterStageClear() unchanged.
+        enterStageClear(game, game.checkpoint);
+        break;
+      }
+
+      if (input.pressed('fire')) fireDual(game);
+      updateWeapons(game, dt);
+
+      // Mirrors 'playing': a kill inside updateEnemies (a boss bomb/aimed
+      // shot connecting) this same frame still needs to be caught here —
+      // updateDrive's own terrain-collision check already ran earlier.
+      if (game.phase === 'boss' && !game.buggy.alive) {
+        game.lives -= 1;
+        setPhase(game, 'dying');
+        resetCombo(game);
+      }
+
+      // Combo updates during a boss fight too — bosses should build the
+      // multiplier just like any other kill/action (hitBoss's award() call
+      // pushes a non-'stageBonus'-tagged scoreEvent, which updateCombo's
+      // cursor already treats as a comboAction with no boss-specific code
+      // needed). The one frame where the boss dies breaks out above before
+      // reaching here, so that frame's final bossHit/bossKill scoreEvents
+      // go uncounted for combo purposes — harmless, since 'stageClear'
+      // freezes the combo entirely anyway and finishStageClear()'s existing
+      // syncComboCursors() call already discards anything logged during it,
+      // this frame's tail end included, once play resumes.
+      if (game.phase === 'boss') updateCombo(game, dt);
       break;
+    }
 
     case 'gameOver':
       if (input.pressed('jump') || input.pressed('fire')) resetToAttract(game);
