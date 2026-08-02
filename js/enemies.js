@@ -15,7 +15,7 @@ import {
   GRAVITY, BUGGY_W, BUGGY_H, killBuggy, buggyHitbox,
 } from './buggy.js';
 import { featuresInRange, addBombCrater } from './terrain.js';
-import { award } from './weapons.js';
+import { award } from './score.js';
 
 // --- tunables --------------------------------------------------------------
 

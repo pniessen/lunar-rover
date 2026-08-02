@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fireDual, updateWeapons, award } from '../js/weapons.js';
+import { fireDual, updateWeapons } from '../js/weapons.js';
+import { award } from '../js/score.js';
 import { createGame } from '../js/state.js';
 
 const DT = 1/60;

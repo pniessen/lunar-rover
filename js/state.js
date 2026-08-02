@@ -4,23 +4,49 @@
 // `game.events`; it never writes back.
 
 import {
-  createBuggy, updateBuggy, checkTerrainCollision, killBuggy, SPEED_BANDS,
+  createBuggy, updateBuggy, checkTerrainCollision, killBuggy, SPEED_BANDS, BUGGY_W,
 } from './buggy.js';
 import {
   buildClassicCourse, createEndlessTerrain, ensureGenerated,
-  checkpointIndexAt, checkpointX,
+  checkpointIndexAt, checkpointX, featuresInRange, STAGE_BREAKS,
 } from './terrain.js';
 import { fireDual, updateWeapons } from './weapons.js';
 import { spawnDirector, updateEnemies } from './enemies.js';
 import { mulberry32 } from './rng.js';
+import {
+  award, featuresJumped, stageBonus, SCORES, STAGE_PAR, COURSE_BONUS,
+} from './score.js';
 
 export const DT = 1 / 60;          // fixed simulation timestep, seconds
 export const DYING_TIME = 0.9;     // explosion hold before the respawn
 export const RESPAWN_TIME = 1.0;   // invulnerable blink-in, buggy already drivable
+export const STAGE_CLEAR_TIME = 2.5; // scripted intermission while the stage bonus tallies
 export const VIEW_W = 384;
 export const VIEW_H = 240;
 export const GROUND_Y = 200;       // top of the terrain strip
 export const HUD_H = 36;
+
+// Buggy is driven with no-op input during the stageClear intermission — it
+// keeps scrolling for the visual effect, but accel/brake/jump/fire are all
+// ignored (only updateBuggy's dt-driven movement/gravity runs).
+const NOOP_INPUT = { pressed: () => false };
+
+// Jump-over tank scoring needs the tank's collision width, which lives in
+// enemies.js as an unexported per-kind lookup (ENEMY_W.tank). Duplicated
+// here as a single constant rather than exporting that whole lookup table
+// just for one value — mirrors how enemies.js already mirrors buggy.js's
+// (unexported) CRATER_TYPES for the same reason.
+const TANK_W = 20;
+
+const JUMP_TAG_BY_TYPE = {
+  crater: 'craterJump',
+  bigCrater: 'craterJump',
+  bombCrater: 'craterJump',
+  doubleCrater: 'doubleCraterJump',
+  mine: 'mineJump',
+  rock: 'rockJump',
+  bigRock: 'rockJump',
+};
 
 const GENERATE_AHEAD = 2400;       // endless terrain lookahead, px
 
@@ -42,7 +68,8 @@ export function createGame(mode = 'classic', seed = 1) {
     phase: 'attract',
     phaseTimer: 0,
     buggy: createBuggy(),
-    // Classic runs course 0 for now; course selection lands with Task 7.
+    // A fresh run always starts on the beginner course (courseId 0);
+    // finishStageClear() promotes to the champion course (1) after Z.
     terrain: mode === 'endless' ? createEndlessTerrain(seed) : buildClassicCourse(0),
     speed: SPEED_BANDS[1],
     camX: 0,
@@ -52,6 +79,10 @@ export function createGame(mode = 'classic', seed = 1) {
     checkpoint: 0,
     stage: 0,
     stageTime: 0,
+    courseId: 0,
+    jumpStartX: null,
+    extraLivesGranted: [],
+    stageClear: null,
     events: [],
     playerShots: [],
     enemyShots: [],
@@ -84,17 +115,60 @@ function anyPressed(input) {
 }
 
 /**
+ * Awards jump-over points for every non-destroyed feature (crater family,
+ * mine, rock family) fully cleared between jumpStartX and landX, plus a
+ * tankJump bonus for any tank enemy fully cleared in the same span.
+ */
+function scoreJump(game, jumpStartX, landX) {
+  const terrain = game.terrain;
+  const candidates = terrain.mode === 'test'
+    ? terrain.features
+    : featuresInRange(terrain, jumpStartX, landX);
+  const cleared = featuresJumped(jumpStartX, landX, candidates);
+  for (const f of cleared) {
+    if (f.destroyed) continue;
+    const tag = JUMP_TAG_BY_TYPE[f.type];
+    if (tag) award(game, SCORES[tag], tag);
+  }
+
+  for (const e of game.enemies) {
+    if (e.kind !== 'tank') continue;
+    if (e.x >= jumpStartX + BUGGY_W && e.x + TANK_W <= landX) {
+      award(game, SCORES.tankJump, 'tankJump');
+    }
+  }
+}
+
+/**
  * Shared drive step for `playing` and `respawning`. During `respawning` the
- * buggy is drivable but invulnerable, so terrain collision is skipped.
+ * buggy is drivable but invulnerable, so terrain collision — and entering
+ * stageClear — are skipped (checkpoint tracking/eventing still runs so the
+ * HUD stays current).
  */
 function updateDrive(game, input, dt, invulnerable) {
   ensureGenerated(game.terrain, game.buggy.worldX + GENERATE_AHEAD);
+
+  const wasAirborne = game.buggy.airborne;
   updateBuggy(game, input, dt);
+  const buggy = game.buggy;
+
+  if (!wasAirborne && buggy.airborne) {
+    game.jumpStartX = buggy.worldX;
+  } else if (wasAirborne && !buggy.airborne && game.jumpStartX != null) {
+    scoreJump(game, game.jumpStartX, buggy.worldX);
+    game.jumpStartX = null;
+  }
 
   // Checkpoints are monotonic — never regress after a respawn drives the
-  // buggy backwards. Full checkpoint/stage progression arrives in Task 7.
-  const cp = checkpointIndexAt(game.buggy.worldX);
-  if (cp > game.checkpoint) game.checkpoint = cp;
+  // buggy backwards.
+  const cp = checkpointIndexAt(buggy.worldX);
+  if (cp > game.checkpoint) {
+    game.checkpoint = cp;
+    game.events.push('checkpoint');
+    if (!invulnerable && STAGE_BREAKS.includes(cp)) {
+      enterStageClear(game, cp);
+    }
+  }
 
   if (invulnerable) return;
 
@@ -108,6 +182,63 @@ function updateDrive(game, input, dt, invulnerable) {
 }
 
 /**
+ * Enters the stageClear intermission. Z (the last STAGE_BREAKS index) is
+ * the course-end case: it pays COURSE_BONUS + a par-time bonus instead of
+ * the regular per-stage stageBonus(), and finishStageClear() swaps/loops
+ * the course afterward rather than just incrementing `stage`.
+ */
+function enterStageClear(game, checkpointIdx) {
+  const isCourseEnd = checkpointIdx === STAGE_BREAKS[STAGE_BREAKS.length - 1];
+  const champion = game.courseId === 1;
+  const total = isCourseEnd
+    ? COURSE_BONUS + 100 * Math.max(0, Math.floor(STAGE_PAR - game.stageTime))
+    : stageBonus(game.stageTime, champion);
+  game.stageClear = { total, paid: 0, isCourseEnd };
+  setPhase(game, 'stageClear');
+}
+
+/** Pays out one 100-pt tick of the stageClear tally per frame (remainder tick last). */
+function tickStageClearTally(game) {
+  const sc = game.stageClear;
+  if (!sc || sc.paid >= sc.total) return;
+  const tick = Math.min(100, sc.total - sc.paid);
+  award(game, tick, 'stageBonus');
+  sc.paid += tick;
+  game.events.push('tally');
+}
+
+/**
+ * Ends the stageClear intermission once its tally is fully paid and its
+ * timer has elapsed. Non-course-end: bump `stage` and resume play in
+ * place. Course-end (Z): rebuild the champion course (courseId 1, fresh —
+ * this both starts the champion course the first time and loops it every
+ * time after) and reset the run's position/checkpoint/stage cleanly so it
+ * restarts at A.
+ */
+function finishStageClear(game) {
+  const sc = game.stageClear;
+  game.stageClear = null;
+  game.stageTime = 0;
+
+  if (sc.isCourseEnd) {
+    game.courseId = 1;
+    game.terrain = buildClassicCourse(1);
+    game.checkpoint = 0;
+    game.stage = 0;
+    const buggy = game.buggy;
+    buggy.worldX = 0;
+    buggy.y = 0;
+    buggy.vy = 0;
+    buggy.airborne = false;
+    buggy.settle = 0;
+  } else {
+    game.stage += 1;
+  }
+
+  setPhase(game, 'playing');
+}
+
+/**
  * Rebuild the buggy from scratch at the last checkpoint. A fresh createBuggy()
  * (rather than resurrecting the dead one) guarantees vy/airborne/settle/
  * wheelPhase/deathCause are all clean — updateBuggy no-ops while `alive` is
@@ -118,6 +249,7 @@ function respawn(game) {
   buggy.worldX = checkpointX(game.checkpoint);
   game.buggy = buggy;
   game.speed = SPEED_BANDS[buggy.band];
+  game.jumpStartX = null; // a jump in progress at death never lands
 }
 
 /** Mutate `game` back to a brand-new attract-screen run, in place. */
@@ -136,6 +268,10 @@ export function updateGame(game, input, dt) {
     case 'playing':
       game.stageTime += dt; // stage clock runs only during live play
       updateDrive(game, input, dt, false);
+      // updateDrive may have entered 'stageClear' this frame (a stage-break
+      // checkpoint just crossed) — the scripted intermission owns the rest
+      // of this frame instead of the usual playing-phase systems.
+      if (game.phase === 'stageClear') break;
       spawnDirector(game, dt);
       updateEnemies(game, dt);
       if (input.pressed('fire')) fireDual(game);
@@ -181,8 +317,22 @@ export function updateGame(game, input, dt) {
       break;
 
     case 'stageClear':
+      // Scripted intermission: buggy keeps scrolling (no-op input, so
+      // accel/brake/jump/fire are all ignored) but is invulnerable and
+      // un-collidable — no terrain/enemy collisions, no new waves, no
+      // enemy/weapon updates. The stage bonus pays out as a ticking tally
+      // (100 pts/frame, 'tally' event each tick) until its total is paid;
+      // the phase only exits once BOTH the tally is fully paid AND
+      // STAGE_CLEAR_TIME has elapsed.
+      updateBuggy(game, NOOP_INPUT, dt);
+      tickStageClearTally(game);
+      if (game.stageClear.paid >= game.stageClear.total && game.phaseTimer >= STAGE_CLEAR_TIME) {
+        finishStageClear(game);
+      }
+      break;
+
     case 'boss':
-      // Recognized phases with no behavior yet (Tasks 7 and 10).
+      // Recognized phase with no behavior yet (Task 10).
       break;
 
     case 'gameOver':

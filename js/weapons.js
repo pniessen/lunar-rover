@@ -12,6 +12,7 @@
 import { GROUND_Y } from './state.js';
 import { BUGGY_W } from './buggy.js';
 import { destroyFeature, featuresInRange } from './terrain.js';
+import { award } from './score.js';
 
 export const SHOT_SPEED_FWD = 300; // px/s, relative to world; buggy speed is added on top
 export const SHOT_SPEED_UP = 260;  // px/s, upward (vy is negative)
@@ -35,16 +36,11 @@ const UP_CULL_HEIGHT = 240;
 
 const SHOOTABLE = new Set(['rock', 'bigRock', 'mine']);
 
-/**
- * Single choke point for scoring. Pushes a {base, tag} record onto
- * game.scoreEvents and adds `base` to game.score. Task 7 will replace the
- * internals (combo multiplier) but must keep this signature.
- */
-export function award(game, base, tag) {
-  if (!game.scoreEvents) game.scoreEvents = [];
-  game.scoreEvents.push({ base, tag });
-  game.score += base;
-}
+// award() now lives in score.js (combo multiplier, extra-life grants,
+// stageBonus tag handling); this module's own collideShots below uses the
+// imported award directly. Every other caller (enemies.js, state.js)
+// imports award from score.js directly too — score.js is the single
+// source, nothing re-exports it.
 
 function muzzleY(game) {
   return GROUND_Y + game.buggy.y - MUZZLE_Y_OFFSET;
