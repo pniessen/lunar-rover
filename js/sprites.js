@@ -5,8 +5,9 @@
 //
 // `buildSprites()` rasterizes them all to offscreen canvases at boot. The raw
 // definitions stay exported so pure-Node tooling can validate them without a
-// DOM, and so render.js can re-rasterize the mountain strips with per-stage
-// palettes (see STAGE_PALETTES in render.js).
+// DOM, and so render.js can rasterize the background strips itself (see
+// STAGE_PALETTES in render.js, which picks one of two mid-ground images per
+// section rather than re-hueing one).
 //
 // Presentation module: may touch the DOM.
 
@@ -104,6 +105,190 @@ export const MOUNTAIN_NEAR_MAP = ridgeMap(96, 40, [10, 24, 14, 19, 8, 21, 12, 17
 // measured in modern-MAME captures — brief §3.2 / §6.1.
 export const MOUNTAIN_FAR_PALETTE = { e: '#0000FF', m: '#0097AE' };
 export const MOUNTAIN_NEAR_PALETTE = { e: '#009700', m: '#00DE51' };
+
+// --- city ruins (M52 bg2 / GFX5) -----------------------------------------
+//
+// The OTHER mid-ground layer. The arcade never re-hues a background — the
+// bg_pal PROM holds exactly one colour triple per layer — what it alternates
+// is *which* mid-ground image the background-control port lets through:
+// rolling hills (bg1) or city ruins (bg2), with the distant mountains always
+// on. See .superpowers/notes/authenticity-research.md §7 finding 3, and
+// STAGE_PALETTES in render.js for the alternation rule.
+//
+// Colours are the city layer's own three pens, VERIFIED from `mpc-3.1m` and
+// measured in a modern-MAME capture of a city section (brief §3.2 / §6.1):
+// pen1 #000000, pen2 #FFDE51 pale yellow, pen3 #00DE51 green, with a solid
+// #00DE51 fill below the image. Nothing else may appear in this strip.
+export const CITY_PALETTE = {
+  m: '#00DE51', // pen3 — building mass and the solid fill below the skyline
+  y: '#FFDE51', // pen2 — lit cornice/rim tracing the whole silhouette
+  k: '#000000', // pen1 — window slots, arch openings, blown-out gaps
+};
+
+// 256px wide because that is the hardware's real wrap: each background layer
+// is one 256x128 image drawn twice and repeating every 256px (brief §8.3).
+// It is also simply less repetitive than the 96px ridge strips — a skyline
+// has recognisable landmarks in a way a jagged ridge does not, so a short
+// tile reads as an obvious loop.
+const CITY_W = 256;
+// Same height as MOUNTAIN_NEAR_MAP so the city occupies exactly the band the
+// hills vacate, drawn at the same GROUND_Y - height and the same P_NEAR
+// parallax rate — it is a swap, not a new layer.
+const CITY_H = 40;
+// Rows of solid pen-3 mass along the bottom. The skyline rises out of this
+// rather than standing on bare sky, which is what the hardware's below-image
+// fill does for every layer.
+const CITY_BASE = 10;
+
+/**
+ * The skyline, as structures rather than hand-typed rows. `h` is height above
+ * the base line; `x`/`w` are columns. Deliberately laid out so nothing
+ * touches column 0 or column CITY_W-1 — the strip is tiled, and a building
+ * straddling the seam would be sliced in half at every repeat.
+ */
+const CITY_BUILDINGS = [
+  { x: 6, w: 15, h: 17, kind: 'tower' },
+  { x: 26, w: 23, h: 25, kind: 'dome', gash: { dx: 15, w: 2, h: 11 } },
+  { x: 53, w: 11, h: 11, kind: 'stub' },
+  { x: 68, w: 21, h: 22, kind: 'stepped' },
+  { x: 93, w: 5, h: 19, kind: 'column' },
+  { x: 101, w: 5, h: 13, kind: 'column' },
+  { x: 112, w: 27, h: 24, kind: 'arch', gash: { dx: 4, w: 2, h: 14 } },
+  { x: 145, w: 13, h: 28, kind: 'tower' },
+  { x: 163, w: 19, h: 18, kind: 'dome' },
+  { x: 188, w: 25, h: 15, kind: 'stepped', gash: { dx: 8, w: 3, h: 8 } },
+  { x: 218, w: 15, h: 23, kind: 'tower' },
+  { x: 238, w: 12, h: 10, kind: 'stub' },
+];
+
+// Jagged descent, in rows below the parapet, for a tower's collapsed side.
+// Deliberately NOT monotonic: a smooth 2px-per-column ramp reads as a pitched
+// roof, which is the opposite of the intended silhouette. The trend descends,
+// the steps do not.
+// Steps of 1-3 rows: big jumps leave 1px-wide spikes that read as antennae
+// rather than as a broken wall.
+const TOWER_BREAK = [1, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13];
+
+/**
+ * Column heights (above the base line) for one structure. Every profile is a
+ * pure function of the structure's own w/h — no randomness anywhere, so the
+ * strip is byte-identical every boot and in every test run.
+ */
+function cityProfile(b) {
+  const { w, h, kind } = b;
+  const prof = new Array(w).fill(h);
+
+  if (kind === 'tower') {
+    // Sheared off on the right — the classic ruined high-rise. The break is
+    // jagged (TOWER_BREAK) rather than a constant slope: a smooth ramp reads
+    // as a pitched roof, which is the opposite of the intended silhouette.
+    const brk = Math.floor(w * 0.55);
+    const floorH = Math.max(3, Math.round(h * 0.45));
+    for (let i = brk; i < w; i++) {
+      prof[i] = Math.max(floorH, h - TOWER_BREAK[(i - brk) % TOWER_BREAK.length]);
+    }
+  } else if (kind === 'dome') {
+    // A drum with a hemispherical cap: the domed structures the city section
+    // is remembered for.
+    const r = w / 2;
+    const drum = Math.max(3, h - Math.round(r));
+    for (let i = 0; i < w; i++) {
+      const dx = i - (r - 0.5);
+      prof[i] = drum + Math.round(Math.sqrt(Math.max(0, r * r - dx * dx)));
+    }
+  } else if (kind === 'stepped') {
+    // Partially collapsed slab: three plateaus stepping down to the right.
+    for (let i = 0; i < w; i++) {
+      if (i >= Math.round(w * 0.75)) prof[i] = Math.max(3, h - 9);
+      else if (i >= Math.round(w * 0.45)) prof[i] = Math.max(3, h - 5);
+    }
+  } else if (kind === 'column') {
+    prof[w - 1] = Math.max(3, h - 2); // snapped top edge
+  } else if (kind === 'stub') {
+    for (let i = w - 3; i < w; i++) prof[i] = Math.max(2, h - 2);
+  }
+  // 'arch' keeps the flat full-height profile; its opening is carved below.
+  return prof;
+}
+
+/**
+ * Builds the tileable city strip. Structure mirrors ridgeMap's: a filled mass
+ * with a distinct rim pen, not a thin outlined silhouette, because that is
+ * what the hardware's 2bpp-image-plus-below-fill actually produces.
+ *
+ * ORIGINAL PIXEL ART. No ROM bitmap was transcribed — this is a skyline drawn
+ * from the reference's description (domed ruins in green with a pale-yellow
+ * highlight) using this project's code-generated-art rule.
+ */
+function cityMap(width, height, base) {
+  const baseTop = height - base;
+  const g = Array.from({ length: height }, () => new Array(width).fill('.'));
+  for (let y = baseTop; y < height; y++) {
+    for (let x = 0; x < width; x++) g[y][x] = 'm';
+  }
+
+  for (const b of CITY_BUILDINGS) {
+    const prof = cityProfile(b);
+    for (let i = 0; i < b.w; i++) {
+      const h = prof[i];
+      if (h <= 0) continue;
+      const x = b.x + i;
+      const top = baseTop - h;
+      for (let y = top; y < baseTop; y++) g[y][x] = 'm';
+      g[top][x] = 'y'; // lit rim traces the whole silhouette, curves included
+    }
+
+    // Window slots: 1px wide, 2px tall, on a 4px grid inset from the walls.
+    // Guarded on the pixel already being mass, so the grid never punches a
+    // hole through a dome's curved edge or over the rim pen.
+    for (let wy = baseTop - 4; wy > baseTop - b.h + 2; wy -= 4) {
+      for (let wx = 2; wx < b.w - 2; wx += 4) {
+        const x = b.x + wx;
+        if (g[wy][x] === 'm' && g[wy - 1][x] === 'm') {
+          g[wy][x] = 'k';
+          g[wy - 1][x] = 'k';
+        }
+      }
+    }
+
+    // A gash: a narrow blown-open shaft punched down from the parapet. This
+    // is what separates "ruins" from "skyline" — without a hole through the
+    // silhouette, tidy window grids on intact blocks read as a living city.
+    if (b.gash) {
+      for (let dx = 0; dx < b.gash.w; dx++) {
+        const x = b.x + b.gash.dx + dx;
+        let top = -1;
+        for (let y = 0; y < baseTop; y++) {
+          if (g[y][x] !== '.') { top = y; break; }
+        }
+        if (top < 0) continue;
+        for (let y = top; y < Math.min(baseTop, top + b.gash.h); y++) g[y][x] = 'k';
+      }
+    }
+
+    if (b.kind === 'arch') {
+      // A round-headed opening standing on the rubble line: the one silhouette
+      // hole big enough to read as "ruin" rather than "window".
+      const aw = 7;
+      const ah = 9;
+      const ax = b.x + Math.round((b.w - aw) / 2);
+      const r = (aw - 1) / 2;
+      for (let dy = 0; dy < ah; dy++) {
+        const y = baseTop - 1 - dy;
+        for (let dx = 0; dx < aw; dx++) {
+          const cap = dy > ah - 1 - r
+            ? Math.sqrt(Math.max(0, r * r - (dy - (ah - 1 - r)) ** 2))
+            : r;
+          if (Math.abs(dx - r) <= cap && g[y][ax + dx] !== '.') g[y][ax + dx] = 'k';
+        }
+      }
+    }
+  }
+
+  return g.map((row) => row.join(''));
+}
+
+export const CITY_MAP = cityMap(CITY_W, CITY_H, CITY_BASE);
 
 // --- shared palettes -----------------------------------------------------
 //
@@ -266,6 +451,10 @@ export const SPRITES = {
   },
 
   // 12x12 spiked mine; two palettes give the warning blink.
+  // Mine: colour set unknown (§4/§6.1 — the research brief could obtain no
+  // capture containing a mine and explicitly refused to guess). Both blink
+  // frames are built from real sprite-PROM entries, so they are in-gamut but
+  // NOT attributed.
   mine0: {
     palette: { k: '#3E3700', d: '#845100', r: '#C10000' },
     map: [
@@ -570,6 +759,7 @@ export const SPRITES = {
 
   mountainFar: { palette: MOUNTAIN_FAR_PALETTE, map: MOUNTAIN_FAR_MAP },
   mountainNear: { palette: MOUNTAIN_NEAR_PALETTE, map: MOUNTAIN_NEAR_MAP },
+  cityRuins: { palette: CITY_PALETTE, map: CITY_MAP },
 };
 
 // --- rasterization -------------------------------------------------------

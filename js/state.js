@@ -29,6 +29,13 @@ export const DT = 1 / 60;          // fixed simulation timestep, seconds
 export const DYING_TIME = 0.9;     // explosion hold before the respawn
 export const RESPAWN_TIME = 1.0;   // invulnerable blink-in, buggy already drivable
 export const STAGE_CLEAR_TIME = 2.5; // scripted intermission while the stage bonus tallies
+// Endless-mode boss cadence, seconds: the first fight at 90s and one every 90s
+// after (game.nextBossAt). It also sets the difficulty step (game.stage is
+// recomputed as min(4, floor(elapsedTotal / this)) at every endless boss) and,
+// since the fights are the only structure endless has, render.js uses it as
+// endless's background "section" length too — see backgroundSection there.
+// Was three separate `90` literals before this was hoisted; no value changed.
+export const ENDLESS_BOSS_PERIOD = 90;
 // The boss arena is a ROLLING clear, not a fixed carve-out: this is how far
 // ahead of the buggy natural terrain is kept swept, re-applied every frame of
 // a fight (see maintainBossArena). It replaced a fixed BOSS_ARENA_LEN = 1600
@@ -124,7 +131,7 @@ export function createGame(mode = 'classic', seed = 1) {
     // modes, but only ever mutated when game.mode === 'endless'.
     elapsedTotal: 0,
     speedBonus: 0,
-    nextBossAt: 90,
+    nextBossAt: ENDLESS_BOSS_PERIOD,
     // Set only in the rare same-frame race where a boss dies in the exact
     // frame the buggy also dies (see the 'boss' case's buggy-death-takes-
     // priority handling and resumeAfterRespawn below) — stashes the
@@ -416,11 +423,11 @@ function enterBoss(game) {
 function enterEndlessBoss(game) {
   game.enemies = [];
   game.enemyShots = [];
-  game.stage = Math.min(4, Math.floor(game.elapsedTotal / 90));
+  game.stage = Math.min(4, Math.floor(game.elapsedTotal / ENDLESS_BOSS_PERIOD));
   startBoss(game);        // must precede maintainBossArena — it gates on game.boss
   maintainBossArena(game);
   setPhase(game, 'boss');
-  game.nextBossAt += 90;
+  game.nextBossAt += ENDLESS_BOSS_PERIOD;
 }
 
 /**
@@ -483,9 +490,11 @@ function tickStageClearTally(game) {
  * elapsedTotal via the same `min(4, floor(elapsedTotal/90))` formula
  * enterEndlessBoss uses — endless has no "next segment" the way classic's
  * checkpoint index does, so an unconditional `+= 1` here would drift stage
- * upward forever across repeated boss cycles (5th cycle onward it would
- * exceed STAGE_PALETTES.length/mountains.length, visually reverting a long
- * run to the stage-0 look instead of staying capped at the stage-4 theme).
+ * upward forever across repeated boss cycles, pushing the difficulty step
+ * past the stage-4 cap the endless curve is designed to settle on. (It used
+ * to also corrupt the visuals, back when render.js indexed its per-stage
+ * palettes by `stage`; the background now runs off its own unclamped section
+ * counter — see backgroundSection there — so this is purely about difficulty.)
  * Course-end (Z): rebuild the champion course (courseId 1, fresh —
  * this both starts the champion course the first time and loops it every
  * time after) and reset the run's position/checkpoint/stage cleanly so it
@@ -522,7 +531,7 @@ function finishStageClear(game) {
   } else if (game.mode === 'endless') {
     // See the docstring above — recomputed from elapsed time, not bumped,
     // so it stays capped at 4 no matter how many boss cycles a run sees.
-    game.stage = Math.min(4, Math.floor(game.elapsedTotal / 90));
+    game.stage = Math.min(4, Math.floor(game.elapsedTotal / ENDLESS_BOSS_PERIOD));
   } else {
     game.stage += 1;
   }

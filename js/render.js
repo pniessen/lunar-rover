@@ -1,11 +1,15 @@
 // render.js — presentation. Owns the 384x240 pixel buffer, the rasterized
-// sprite set, and the per-stage background palettes. Reads `game`, never
-// writes to it.
+// sprite set, and the background table (one palette; what alternates across
+// the course is which mid-ground image is drawn — see STAGE_PALETTES).
+// Reads `game`, never writes to it.
 
-import { buildSprites, rasterize, MOUNTAIN_FAR_MAP, MOUNTAIN_NEAR_MAP } from './sprites.js';
+import {
+  buildSprites, rasterize, MOUNTAIN_FAR_MAP, MOUNTAIN_NEAR_MAP, CITY_MAP, CITY_PALETTE,
+} from './sprites.js';
 import { featuresInRange, FEATURE_W } from './terrain.js';
 import {
   buggyScreenX, DT, DYING_TIME, VIEW_W, VIEW_H, GROUND_Y, HUD_H, INITIALS_LEN,
+  ENDLESS_BOSS_PERIOD,
 } from './state.js';
 import { BUGGY_W } from './buggy.js';
 import { mulberry32 } from './rng.js';
@@ -57,23 +61,13 @@ const P_FAR = 0.2;
 const P_NEAR = 0.5;
 
 /**
- * THE background palette, indexed by game.stage.
- *
- * This used to be five re-hued stage themes. It is now one entry repeated,
- * because the hardware cannot do the other four: the M52's background palette
- * PROM (`mpc-3.1m`) is 32 bytes holding only FIVE distinct colours, and each
- * background layer has exactly ONE colour triple in it. The images are 2bpp
- * with a fixed per-layer palette, so their colours physically cannot change
- * between stages — that is the absence of the data a hue change would need,
- * not an inference about the code. See
- * .superpowers/notes/authenticity-research.md §7, finding 1.
- *
- * What DOES vary per section on real hardware is which mid-ground layer is
- * drawn: the distant mountains are always on, and the mid-ground alternates
- * between rolling hills (bg1) and city ruins (bg2) via the background-control
- * port. That is the real variety mechanism and it is the NEXT pass's job; the
- * five-element array shape is kept deliberately so there is somewhere to hook
- * it in (and so `game.stage`'s existing modulo indexing keeps working).
+ * THE background palette. Exactly one set of colours, because the hardware has
+ * exactly one: the M52's background palette PROM (`mpc-3.1m`) is 32 bytes
+ * holding only FIVE distinct colours, and each background layer has exactly
+ * ONE colour triple in it. The images are 2bpp with a fixed per-layer palette,
+ * so their colours physically cannot change between stages — that is the
+ * absence of the data a hue change would need, not an inference about the
+ * code. See .superpowers/notes/authenticity-research.md §7, finding 1.
  *
  * Sky is `#000000` — VERIFIED across three captures as 99-100% pure black.
  * The starfield and the Earth sprite are this remake's ONE intentional
@@ -87,10 +81,82 @@ const AUTHENTIC_PALETTE = {
   ground: '#FF9751',                    // flat peach regolith, one colour, no shading
 };
 
+/** The two mid-ground images the hardware swaps between. See `mid` below. */
+export const MID_HILLS = 'hills'; // bg1 / GFX4 — MOUNTAIN_NEAR_MAP
+export const MID_CITY = 'city';   // bg2 / GFX5 — CITY_MAP
+
+/**
+ * THE background table, indexed by the background SECTION (see
+ * backgroundSection). Five entries that differ in exactly one field: `mid`,
+ * which mid-ground image is drawn. That IS the arcade's background variety.
+ *
+ * The distant mountains (bg0) are always on; the background-control port `$C0`
+ * lets through EITHER the rolling hills (bg1, port bit 0x04 set = city
+ * suppressed) OR the city ruins (bg2, port bit 0x02 set = hills suppressed),
+ * never both — the two share one scroll register, which is the hardware reason
+ * only one can show. Brief §7 finding 3 / §8.3.
+ *
+ * WHY THIS EXACT SEQUENCE. The disassembly at $0C08 computes the port value
+ * from the section counter `mE513`:
+ *
+ *     LD A,(mE513) / DEC A / CP $05 / ADC $00 / LD B,$FB / RRA / JR C / INC B
+ *
+ * i.e. A' = (s-1) + (s-1 < 5 ? 1 : 0), then bit 0 of A' picks $FB (hills) or
+ * $FC (city). For a 1-based counter that is A' = s for s in 1..5 and s-1 after,
+ * so the parity — and therefore the layer — repeats with period 5 while staying
+ * phase-aligned: sections 1..5 give hills/city/hills/city/hills, and 6..10 give
+ * exactly the same again. Five sections per course, every course starting on
+ * hills. Indexing this five-element array by `section % 5` reproduces that,
+ * including the doubled hills the `CP $05 / ADC $00` fixup creates at the
+ * 5→6 wrap.
+ *
+ * The brief labels the per-section sequence INFERRED (it did not trace
+ * `mE513`'s initialisation), so treat the SEQUENCE as our best reading and the
+ * MECHANISM — mountains always, mid-ground alternating, one palette throughout
+ * — as the verified part.
+ *
+ * The array shape is the hook the palette pass deliberately left in place.
+ */
 export const STAGE_PALETTES = [
-  AUTHENTIC_PALETTE, AUTHENTIC_PALETTE, AUTHENTIC_PALETTE,
-  AUTHENTIC_PALETTE, AUTHENTIC_PALETTE,
+  { ...AUTHENTIC_PALETTE, mid: MID_HILLS },
+  { ...AUTHENTIC_PALETTE, mid: MID_CITY },
+  { ...AUTHENTIC_PALETTE, mid: MID_HILLS },
+  { ...AUTHENTIC_PALETTE, mid: MID_CITY },
+  { ...AUTHENTIC_PALETTE, mid: MID_HILLS },
 ];
+
+/**
+ * Which background section the run is in — the counter STAGE_PALETTES is
+ * indexed by. Pure function of `game`, no wall clock and no randomness, so the
+ * background is as deterministic as the simulation it sits behind.
+ *
+ * CLASSIC: one section per stage, i.e. `game.stage`. state.js bumps it at
+ * every STAGE_BREAKS checkpoint (E/J/O/T/Z) and resets it to 0 on the course
+ * rollover, which is exactly the arcade's five-per-course, always-start-on-
+ * hills structure. The swap therefore always lands inside a stage-break boss
+ * fight / STAGE CLEAR intermission rather than popping mid-drive.
+ *
+ * ENDLESS: it has no checkpoints and no stage breaks, and `game.stage` is
+ * deliberately CLAMPED at 4 there (it is a difficulty step, recomputed as
+ * min(4, floor(elapsedTotal / ENDLESS_BOSS_PERIOD))), so reusing it would
+ * freeze the background on hills forever after six minutes. Endless's only
+ * real structure is its 90-second boss cadence, so that is the cadence used:
+ * one section per boss cycle, UNCLAMPED, so it keeps alternating for as long
+ * as the run lasts. A section is therefore ~90s in both modes (a classic stage
+ * is four-to-five 1200px checkpoints), and in endless the swap lands on the
+ * frame the boss appears — the most eventful frame available to hide it on.
+ */
+export function backgroundSection(game) {
+  const n = game && game.mode === 'endless'
+    ? Math.floor((game.elapsedTotal || 0) / ENDLESS_BOSS_PERIOD)
+    : (game && game.stage) || 0;
+  return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
+}
+
+/** The STAGE_PALETTES entry in force this frame. */
+export function paletteFor(game) {
+  return STAGE_PALETTES[backgroundSection(game) % STAGE_PALETTES.length];
+}
 
 const CRATER_SPRITE = {
   crater: 'crater', bigCrater: 'bigCrater',
@@ -209,12 +275,17 @@ export function createRenderer(screenCanvas) {
   const screenCtx = screenCanvas.getContext('2d');
   screenCtx.imageSmoothingEnabled = false;
 
-  // Mountain strips are re-rasterized once per stage palette at boot, so the
-  // per-stage re-hue costs nothing at frame time.
-  const mountains = STAGE_PALETTES.map((p) => ({
-    far: rasterize(MOUNTAIN_FAR_MAP, p.far, 1, 'mountainFar'),
-    near: rasterize(MOUNTAIN_NEAR_MAP, p.near, 1, 'mountainNear'),
-  }));
+  // The three background images, rasterized ONCE at boot. There used to be one
+  // rasterized set per stage, for the five re-hued stage palettes that turned
+  // out not to be a thing the hardware can do; with a single palette the
+  // per-stage copies were five identical strips. What varies is which of
+  // `hills`/`city` drawBackdrop reaches for, and that costs nothing at frame
+  // time either.
+  const bg = {
+    far: rasterize(MOUNTAIN_FAR_MAP, AUTHENTIC_PALETTE.far, 1, 'mountainFar'),
+    [MID_HILLS]: rasterize(MOUNTAIN_NEAR_MAP, AUTHENTIC_PALETTE.near, 1, 'mountainNear'),
+    [MID_CITY]: rasterize(CITY_MAP, CITY_PALETTE, 1, 'cityRuins'),
+  };
 
   // Fixed starfield, seeded so it is identical every run.
   const rng = mulberry32(20250801);
@@ -230,7 +301,7 @@ export function createRenderer(screenCanvas) {
 
   return {
     screen: screenCanvas, screenCtx, buffer, ctx,
-    sprites: buildSprites(), mountains, stars, earthX, tick: 0,
+    sprites: buildSprites(), bg, stars, earthX, tick: 0,
 
     // Task 14 presentation state. All of this is owned by the renderer, not
     // by `game` — state.js stays a pure simulation with no notion of "shake
@@ -300,10 +371,22 @@ function drawSky(r, pal, camX) {
   if (ex < VIEW_W + 16) ctx.drawImage(r.sprites.earth, Math.round(ex), HUD_H + 10);
 }
 
-function drawMountains(r, stage, camX) {
-  const set = r.mountains[stage] || r.mountains[0];
-  drawTiled(r.ctx, set.far, camX * P_FAR, GROUND_Y - set.far.height);
-  drawTiled(r.ctx, set.near, camX * P_NEAR, GROUND_Y - set.near.height);
+/**
+ * The two parallax bands behind the terrain. The distant mountains are ALWAYS
+ * drawn; the mid-ground is whichever of hills/city this section's palette
+ * selects (see STAGE_PALETTES) — the software equivalent of the arcade's
+ * background-control port suppressing one of bg1/bg2.
+ *
+ * Both mid-ground images are the same height and scroll at the same P_NEAR
+ * rate, so a swap changes the artwork in that band and nothing else. The city
+ * strip is wider (256px vs 96) purely so its landmarks loop less obviously;
+ * drawTiled wraps on each image's own width.
+ */
+function drawBackdrop(r, pal, camX) {
+  const far = r.bg.far;
+  drawTiled(r.ctx, far, camX * P_FAR, GROUND_Y - far.height);
+  const mid = r.bg[pal.mid] || r.bg[MID_HILLS];
+  drawTiled(r.ctx, mid, camX * P_NEAR, GROUND_Y - mid.height);
 }
 
 // The terrain strip is ONE FLAT COLOUR — `#FF9751` peach regolith, top to
@@ -684,15 +767,23 @@ function drawOverlays(r, game, screenX, by) {
   }
 
   if (game.phase === 'attract') {
-    // Dims the whole play area INCLUDING the terrain strip (unlike every
-    // other overlay, which stops at GROUND_Y): the control-hint block below
-    // sits on the regolith, and it needs the same backdrop as the menu above
-    // it to stay legible against a bright stage palette.
+    // Dims the sky band ONLY, stopping at GROUND_Y exactly like the pause,
+    // stage-clear and game-over overlays.
+    //
+    // It used to run the full height of the buffer, because the control-hint
+    // block was laid out down on the regolith and needed the same backdrop as
+    // the menu to stay readable. That cost the attract screen — the first
+    // thing anyone sees — its ground colour: 45% black over the authentic
+    // #FF9751 peach resolves to a muddy #8C532C brown, on the one screen a
+    // player has time to look at. The fix is layout, not alpha: the whole
+    // block moved up into the band that is already dimmed, so the hints get
+    // the identical backdrop for free and the regolith is drawn at its true
+    // colour. Everything below is spaced to end above GROUND_Y (200).
     ctx.fillStyle = 'rgba(0,0,0,0.45)';
-    ctx.fillRect(0, HUD_H, VIEW_W, VIEW_H - HUD_H);
-    centerText(ctx, 'LUNAR ROVER', 83, '#210000', 3);
-    centerText(ctx, 'LUNAR ROVER', 81, '#FF00AE', 3);
-    centerText(ctx, 'RETRO-MOD', 110, '#00B8FF', 1);
+    ctx.fillRect(0, HUD_H, VIEW_W, GROUND_Y - HUD_H);
+    centerText(ctx, 'LUNAR ROVER', 64, '#210000', 3);
+    centerText(ctx, 'LUNAR ROVER', 62, '#FF00AE', 3);
+    centerText(ctx, 'RETRO-MOD', 91, '#00B8FF', 1);
 
     // Mode-select menu (Task 13): accel/brake toggle game.menuIndex between
     // CLASSIC (0) and ENDLESS (1) — see state.js's 'attract' case; jump/fire
@@ -702,13 +793,13 @@ function drawOverlays(r, game, screenX, by) {
     const classicSel = game.menuIndex === 0;
     const optW = textWidth('CLASSIC', 1);
     const optX = (VIEW_W - optW) / 2;
-    drawText(ctx, optX, 126, 'CLASSIC', classicSel ? '#FFFF00' : '#FFFFFF', 1);
-    drawText(ctx, optX, 138, 'ENDLESS', classicSel ? '#FFFFFF' : '#FFFF00', 1);
+    drawText(ctx, optX, 106, 'CLASSIC', classicSel ? '#FFFF00' : '#FFFFFF', 1);
+    drawText(ctx, optX, 118, 'ENDLESS', classicSel ? '#FFFFFF' : '#FFFF00', 1);
 
     const blink = Math.floor(game.phaseTimer * 2) % 2 === 0;
     if (blink) {
       ctx.fillStyle = '#FFFF00';
-      ctx.fillRect(optX - 10, (classicSel ? 126 : 138) + 1, 4, 4);
+      ctx.fillRect(optX - 10, (classicSel ? 106 : 118) + 1, 4, 4);
     }
 
     // Top 3 of the currently-highlighted mode's table (Task 14 — this used
@@ -716,20 +807,23 @@ function drawOverlays(r, game, screenX, by) {
     // block keeps a fixed height and the menu below it never jumps.
     const scores = loadScores(classicSel ? 'classic' : 'endless');
     for (let i = 0; i < ATTRACT_TABLE_ROWS; i++) {
-      centerText(ctx, scoreRow(i + 1, scores[i]), 152 + i * 10,
+      centerText(ctx, scoreRow(i + 1, scores[i]), 132 + i * 10,
         i === 0 ? '#FFFF00' : '#00B8FF', 1);
     }
 
     if (blink) {
-      centerText(ctx, 'PRESS FIRE', 182, '#FFFFFF', 1);
+      centerText(ctx, 'PRESS FIRE', 166, '#FFFFFF', 1);
     }
 
-    // The full control map, dimmed, below the prompt (finding I6). Drawn over
-    // the terrain strip rather than inside the dimmed panel — there is no
-    // vertical room left above GROUND_Y, and the dim grey reads fine against
-    // the regolith.
-    centerText(ctx, CONTROL_HINTS[0], 206, '#B8FFAE', 1);
-    centerText(ctx, CONTROL_HINTS[1], 216, '#B8FFAE', 1);
+    // The full control map (finding I6), now the bottom of the dimmed panel
+    // instead of an overlay on the regolith. Line 2 is the widest thing on
+    // the screen at 1x (62 glyphs x 6px), which is why a backing panel behind
+    // just the hints would have been the full width of the buffer and no
+    // better than dimming the whole strip — moving them was the smaller
+    // change as well as the better-looking one. Ends at y 197, 3px clear of
+    // GROUND_Y.
+    centerText(ctx, CONTROL_HINTS[0], 180, '#B8FFAE', 1);
+    centerText(ctx, CONTROL_HINTS[1], 190, '#B8FFAE', 1);
     return;
   }
 
@@ -791,7 +885,7 @@ export function render(r, game, alpha, simDt = DT) {
   // — intentional, small behavior change, verified visually (see BUILD-LOG).
   if (!game.paused) r.tick++;
 
-  const pal = STAGE_PALETTES[game.stage] || STAGE_PALETTES[0];
+  const pal = paletteFor(game);
   const b = game.buggy;
 
   // Extrapolate the buggy by the leftover fraction of a step so the world
@@ -820,7 +914,7 @@ export function render(r, game, alpha, simDt = DT) {
   ctx.translate(r.shakeX, r.shakeY);
 
   drawSky(r, pal, camX);
-  drawMountains(r, game.stage, camX);
+  drawBackdrop(r, pal, camX);
   drawTerrain(r, game, pal, camX);
   // After the terrain (so the bracket reads on top of the ground band) but
   // before the buggy and the entities, so a falling bomb is never hidden by
