@@ -16,7 +16,9 @@ import { mulberry32 } from './rng.js';
 import {
   award, featuresJumped, stageBonus, SCORES, STAGE_PAR, COURSE_BONUS,
 } from './score.js';
-import { createCombo, updateCombo, resetCombo } from './combo.js';
+import {
+  createCombo, updateCombo, resetCombo, syncComboCursors,
+} from './combo.js';
 
 export const DT = 1 / 60;          // fixed simulation timestep, seconds
 export const DYING_TIME = 0.9;     // explosion hold before the respawn
@@ -265,6 +267,10 @@ function finishStageClear(game) {
   }
 
   setPhase(game, 'playing');
+  // Discard anything scored/evented during the intermission (see
+  // syncComboCursors' docstring) rather than letting it get replayed as
+  // combo actions the instant play resumes.
+  syncComboCursors(game);
 }
 
 /**
@@ -354,7 +360,13 @@ export function updateGame(game, input, dt) {
       if (input.pressed('fire')) fireDual(game);
       updateWeapons(game, dt);
       updateEnemies(game, dt);
-      if (game.phaseTimer >= RESPAWN_TIME) setPhase(game, 'playing');
+      if (game.phaseTimer >= RESPAWN_TIME) {
+        setPhase(game, 'playing');
+        // Discard anything scored/evented across the whole dying+respawning
+        // window (see syncComboCursors' docstring) — a death is a clean
+        // slate, not a lump of free combo the instant play resumes.
+        syncComboCursors(game);
+      }
       break;
 
     case 'stageClear':

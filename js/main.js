@@ -6,6 +6,7 @@ import { createInput } from './input.js';
 import { createGame, updateGame, DT, VIEW_W, VIEW_H } from './state.js';
 import { createRenderer, render } from './render.js';
 import { createAudio } from './audio.js';
+import { notifyGameEventsCleared } from './combo.js';
 
 const screen = document.getElementById('screen');
 const touchRoot = document.getElementById('touch-ui');
@@ -75,6 +76,12 @@ function loop(t) {
   // read game.events) but before the single clear point below.
   audio.processEvents(game.events, game);
   game.events.length = 0;
+  // combo.js's updateCombo keeps a cursor into game.events (see its
+  // docstring) that must be invalidated in lockstep with this clear —
+  // otherwise a lag-spike rendered frame that pushes enough new events in
+  // its first tick to reach/exceed the old cursor would silently hide the
+  // dip to zero from a plain length check inside updateCombo.
+  notifyGameEventsCleared(game);
   requestAnimationFrame(loop);
 }
 

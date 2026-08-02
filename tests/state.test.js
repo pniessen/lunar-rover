@@ -46,7 +46,7 @@ test('createGame produces the documented shape', () => {
   assert.equal(g.score, 0);
   assert.equal(g.rngSeed, 7);
   assert.deepEqual(g.combo, {
-    count: 0, mult: 1, timer: 0, lastSeenScoreEventCount: 0,
+    count: 0, mult: 1, timer: 0, lastSeenScoreEventCount: 0, lastSeenGameEventCount: 0,
   });
   for (const k of ['events', 'playerShots', 'enemyShots', 'enemies', 'capsules']) {
     assert.ok(Array.isArray(g[k]), `${k} must be an array`);
