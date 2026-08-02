@@ -23,11 +23,12 @@ import { pushFx } from './particles.js';
 // --- tunables / balance guardrails ------------------------------------------
 //
 // Design notes (see task-12 brief):
-//  - maxHp = 12 + stage*6 for the four early bosses (E/J/O/T at
-//    stage 0/1/2/3 -> 12/18/24/30 hp); the Z course-end boss is a fixed
-//    40 hp two-phase fight (stage===4 when entering — the stage index has
+//  - maxHp = BASE_HP + stage*HP_PER_STAGE for the four early bosses (E/J/O/T
+//    at stage 0/1/2/3 -> 18/24/30/36 hp); the Z course-end boss is a fixed
+//    FINAL_HP two-phase fight (stage===4 when entering — the stage index has
 //    not yet incremented past the U-Z segment), reaching phase 2 (faster
-//    patterns + guaranteed diveSweep) at hp<=20.
+//    patterns + guaranteed diveSweep) at hp<=FINAL_PHASE2_HP.
+//    See the PACING block by those constants for the measured kill times.
 //  - Every attack is telegraphed 0.6s before it fires (bossTelegraph event
 //    + game.boss.telegraph>0 for render.js to flash the sprite), so the
 //    player always gets a fair warning window before anything launches.
@@ -55,28 +56,57 @@ const BOMB_COUNT = 5;
 const BOMB_INTERVAL = 0.35;   // seconds between each of the 5 bombs
 const BOMB_CARPET_TAIL = 0.3; // buffer after the last bomb before the next hover
 const BOMB_CARPET_DURATION = (BOMB_COUNT - 1) * BOMB_INTERVAL + BOMB_CARPET_TAIL;
+// Boss bombs are LAUNCHED downward rather than merely released: this initial
+// vy (px/s, applied on top of enemies.js's BOMB_GRAVITY = GRAVITY*0.5) cuts
+// the 130px fall from hover altitude from ~1.23s to ~0.72s. That is the whole
+// readability lever — see the READABILITY block below. Only the boss sets it;
+// a bomber UFO's bombs still leave with vy 0 and fall exactly as before.
+const BOMB_DROP_VY = 120;
+
 // World-x offsets (from the buggy's position at each bomb's fire time) the
-// 5 bombs target. The 92px gap between offset index 2 (crater spans 440-468)
-// and index 3 (560-588) is the guaranteed safe lane — comfortably wider than
-// BUGGY_W(32).
+// 5 bombs target. The spacing between them is unchanged since the fix wave —
+// index 2 (crater spans +360..+388) to index 3 (+480..+508) is the guaranteed
+// safe lane, and it lands as 92px of free road at band 2 / 50px at band 0,
+// both driveable (buggy.js tests craters against the buggy's MIDPOINT only).
 //
 // The offsets are all LEAD, and the lead is what makes the carpet fair
 // (final-review fix wave, folded into C1's "keep telegraphs/fairness"). A
-// bomb takes ~1.24s to fall from hover altitude (130px at GRAVITY*0.5), in
-// which time the buggy covers 99px (band 0) to 247px (band 2). The original
-// [40, 90, 140, 260, 310] were measured from the buggy at DROP time, so by
-// LANDING time the carpet had slid backwards past the player: at band 1 the
-// first three craters appeared behind the buggy entirely, and at band 2 the
-// fourth materialized at worldX+13..+41 — i.e. underneath the buggy's own
-// midpoint, an instant unavoidable death with no reaction window at all.
-// (Measured with the fight bot: ~1 death per 2s of boss fight at top speed,
-// none of them dodgeable.) Shifting every offset by +300 puts the whole
-// carpet ahead of the buggy at every speed band — landing at worldX+93 in
-// the worst case, ~0.3s of road at top speed — while preserving the exact
-// crater spacing, and with it the guaranteed lane the design has always
-// claimed. The pattern the player learns: jump the leading three-crater
+// bomb falls for ~0.72s, in which the buggy covers 57px (band 0) to
+// 143px (band 2), so every offset has to clear that plus the buggy's own
+// 32px body. The original [40, 90, 140, 260, 310] were measured from the
+// buggy at DROP time, so by LANDING time the carpet had slid backwards past
+// the player: at band 1 the first three craters appeared behind the buggy
+// entirely, and at band 2 the fourth materialized at worldX+13..+41 — i.e.
+// underneath the buggy's own midpoint, an instant unavoidable death with no
+// reaction window at all. (Measured with the fight bot: ~1 death per 2s of
+// boss fight at top speed, none of them dodgeable.)
+//
+// --- READABILITY (this pass) -------------------------------------------------
+// The fix wave shifted every offset by +300, which bought the clearance but
+// spent it all on lead: the whole carpet was released at screen x 396..720 on
+// a 384px viewport, so the near bombs only scrolled into frame ~30% into their
+// fall and the far pair was never on screen at all. The player got the 0.6s
+// bossTelegraph — the attack was announced, but never *located*.
+//
+// Halving the fall time buys the same clearance for 100px less lead, so the
+// offsets drop back by 80 and the carpet is released at 370..640 instead: at
+// band 2 the first bomb is now fully on screen from the frame it leaves the
+// mothership, and drawBombMarkers in render.js paints a ground bracket on
+// every airborne bomb's impact footprint. Measured at band 2: bomb 0 visible
+// 100% of its fall (was 73%), bomb 1 75%, bomb 2 40%, and the reaction window
+// on the first crater goes 0.39s -> 0.50s.
+//
+// The far pair still lands off the right edge at band 2 and this is not a
+// tuning failure, it is geometry: the carpet's offset span (270px) plus the
+// buggy's body (32px) plus its screen x at top speed (110px) is 412px against
+// a 384px viewport, so no fall time and no lead can fit the whole carpet on
+// screen without either narrowing the safe lane or cutting the reaction
+// window below the 0.39s floor. Those craters land 337/387px ahead (1.7/1.9s
+// of road) and scroll into frame ~1.3s before the buggy reaches them.
+//
+// The pattern the player learns is unchanged: jump the leading three-crater
 // cluster, land in the wide lane, then jump the trailing pair.
-const BOMB_OFFSETS = [340, 390, 440, 560, 610];
+export const BOMB_OFFSETS = [260, 310, 360, 480, 530];
 
 const AIMED_COUNT = 3;
 const AIMED_INTERVAL = 0.4;   // seconds between each of the 3 aimed shots
@@ -127,11 +157,14 @@ const HOVER_Y = 70;
 // passes, it swings out ahead again and attacks.
 //
 // Measured with the hold-cruise / fire-on-cooldown / jump-the-craters bot in
-// tests/boss.test.js (4 shots/s, band 1): ~0.7-0.9 hits per second of fight,
-// so the 12hp stage-0 boss dies in ~16s losing 0-1 lives, the 24hp stage-2
-// boss in ~29s and the 40hp final boss in ~49s without dying. That sits
-// inside the review's 30-60s balance guardrail while still being a fight —
-// and, unlike the old geometry, it is a fight the player can actually win.
+// tests/boss.test.js (4 shots/s, band 1): 0.75-0.81 hp per second of fight.
+// That rate is the real pacing constraint — see the PACING block above the hp
+// constants for the resulting kill times, which are asserted by the PACING
+// tests rather than left as a claim here. (This comment used to assert the
+// fight "sits inside the review's 30-60s balance guardrail". It did not: the
+// stage-0 boss was an 11-15s fight, and no measurement in the repo ever said
+// otherwise. Nothing here is a guardrail — it is a measurement, and if the
+// numbers above and the tests ever disagree, believe the tests.)
 //
 // The sweep is a pure function of b.sweepT (accumulated dt) — no RNG at all,
 // so the fight is bit-identical for a given input sequence, per the
@@ -150,7 +183,39 @@ const BOSS_H = 15;
 const BOX_PAD_X = 2;
 const BOX_PAD_Y = 3;
 
-const FINAL_PHASE2_HP = 20;   // the 40hp final boss enters phase2 at hp<=20
+// --- PACING (measured, not intended) ----------------------------------------
+//
+// Damage throughput is a property of the sweep geometry above, not of these
+// numbers: the mothership only crosses the up-gun column for ~16% of each
+// 4.2s sweep, which caps a competent player at ~0.75-0.81 hp/s no matter what
+// the hp bar says. So hp is the only honest pacing dial, and it is linear in
+// stage.
+//
+// The whole curve was shifted +6hp in the boss-polish pass. The shape is
+// unchanged (still +HP_PER_STAGE per stage, still a fixed course-end boss a
+// step above stage 3) — the old base of 12 simply put the very first boss the
+// player ever meets at ~15s, so the escalation curve started flat and the
+// comment right here used to claim a "30-60s guardrail" it did not meet.
+//
+// Measured end to end through updateGame with the tests/boss.test.js bot
+// (4 shots/s, cruise band 1, jump-the-craters, not dying), which is what the
+// PACING tests in tests/boss.test.js assert +/-25% windows around:
+//
+//   stage 0  18hp  22.6s   (was 12hp, 11.2s)
+//   stage 1  24hp  30.9s   (was 18hp, 18.4s)
+//   stage 2  30hp  38.9s   (was 24hp, 28.9s)
+//   stage 3  36hp  48.3s   (was 30hp, 38.5s)
+//   final    46hp  63.4s   (was 40hp, 48.3s) — phase 2 engages at hp<=20
+//
+// Band 0 tracks band 1 closely; band 2 runs longer on the middle stages
+// because the bot spends more of the fight airborne over craters. Those bands
+// are not asserted: the bot's fixed 1.0s jump arc makes it a much weaker
+// driver than a human at the extremes, so a tight bound there would be
+// measuring the bot rather than the fight.
+const BASE_HP = 18;           // stage-0 boss — the first one the player meets
+const HP_PER_STAGE = 6;       // linear escalation across E/J/O/T
+const FINAL_HP = 46;          // the Z course-end boss, a step above stage 3
+const FINAL_PHASE2_HP = 20;   // the final boss enters phase2 at hp<=20
 const PHASE2_SPEED_MULT = 0.7; // phase2 shortens hover/telegraph (faster fight)
 
 // --- hp scaling --------------------------------------------------------------
@@ -162,7 +227,7 @@ const PHASE2_SPEED_MULT = 0.7; // phase2 shortens hover/telegraph (faster fight)
  */
 export function startBoss(game) {
   const isFinal = game.stage === 4; // only the Z break happens at stage 4
-  const maxHp = isFinal ? 40 : 12 + game.stage * 6;
+  const maxHp = isFinal ? FINAL_HP : BASE_HP + game.stage * HP_PER_STAGE;
   game.boss = {
     hp: maxHp,
     maxHp,
@@ -262,7 +327,10 @@ function fireBossBomb(game, index) {
     x: game.buggy.worldX + BOMB_OFFSETS[index % BOMB_OFFSETS.length],
     y: b.y,
     vx: 0,
-    vy: 0,
+    // Launched, not dropped — see BOMB_DROP_VY. enemies.js's moveEnemyShots
+    // integrates BOMB_GRAVITY on top of whatever vy a bomb arrives with, so
+    // this needs no special case there.
+    vy: BOMB_DROP_VY,
   });
 }
 

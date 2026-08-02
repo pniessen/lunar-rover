@@ -324,6 +324,46 @@ function drawTerrain(r, game, pal, camX) {
   }
 }
 
+// Ground impact markers for airborne bombs — the classic arcade
+// shadow-under-the-projectile, and the thing that makes a boss bomb carpet
+// *located* rather than merely announced.
+//
+// A bomb holds a fixed world column while the camera scrolls past it, so its
+// x IS the left edge of the bombCrater it will open (see enemies.js's
+// resolveBombImpacts -> terrain.js's addBombCrater, which uses the same x and
+// FEATURE_W.bombCrater = 28). The bracket therefore sits exactly on the
+// footprint the player has to jump, at ground level where their eyes already
+// are, instead of asking them to track a 8px dot falling from the top of the
+// screen while also reading the mothership's telegraph flash.
+//
+// Presentation only: derived entirely from game.enemyShots and r.tick, writes
+// nothing back to game, so the simulation stays bit-identical and headless.
+const BOMB_MARK_W = 28;    // == FEATURE_W.bombCrater, the footprint it predicts
+const BOMB_MARK_FALL = 130; // px of fall the "closeness" ramp is scaled over
+
+function drawBombMarkers(r, game, camX) {
+  const { ctx } = r;
+  for (const s of game.enemyShots) {
+    if (s.kind !== 'bomb' || s.y >= GROUND_Y) continue;
+    const x = Math.round(s.x - camX);
+    if (x > VIEW_W || x + BOMB_MARK_W < 0) continue;
+
+    // 0 just after release, 1 at impact: the bracket brightens, grows taller
+    // and blinks faster as the bomb closes, so a glance reads "how long have
+    // I got" as well as "where".
+    const near = Math.max(0, Math.min(1, 1 - (GROUND_Y - s.y) / BOMB_MARK_FALL));
+    const blink = Math.floor(r.tick / (near > 0.55 ? 2 : 5)) % 2 === 0;
+    ctx.globalAlpha = (0.3 + 0.55 * near) * (blink ? 1 : 0.4);
+    ctx.fillStyle = '#ff4030';
+    const baseY = GROUND_Y - 1;
+    ctx.fillRect(x, baseY, BOMB_MARK_W, 1);
+    const tick = 2 + Math.round(5 * near);
+    ctx.fillRect(x, baseY - tick, 1, tick);
+    ctx.fillRect(x + BOMB_MARK_W - 1, baseY - tick, 1, tick);
+    ctx.globalAlpha = 1;
+  }
+}
+
 function drawBuggy(r, game, screenX, by) {
   const { ctx, sprites } = r;
   const b = game.buggy;
@@ -735,6 +775,10 @@ export function render(r, game, alpha, simDt = DT) {
   drawSky(r, pal, camX);
   drawMountains(r, game.stage, camX);
   drawTerrain(r, game, pal, camX);
+  // After the terrain (so the bracket reads on top of the ground band) but
+  // before the buggy and the entities, so a falling bomb is never hidden by
+  // its own marker.
+  drawBombMarkers(r, game, camX);
 
   // The buggy is hidden while it is exploding, and blinks at 8 Hz while
   // respawning to signal invulnerability.
