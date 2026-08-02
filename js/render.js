@@ -57,41 +57,39 @@ const P_FAR = 0.2;
 const P_NEAR = 0.5;
 
 /**
- * Five background themes, indexed by game.stage. Stage 0 is the faithful
- * Moon Patrol look: near-black sky, green ranges, magenta dust. The rest
- * re-hue the sky, both mountain layers and the terrain strip.
+ * THE background palette, indexed by game.stage.
+ *
+ * This used to be five re-hued stage themes. It is now one entry repeated,
+ * because the hardware cannot do the other four: the M52's background palette
+ * PROM (`mpc-3.1m`) is 32 bytes holding only FIVE distinct colours, and each
+ * background layer has exactly ONE colour triple in it. The images are 2bpp
+ * with a fixed per-layer palette, so their colours physically cannot change
+ * between stages — that is the absence of the data a hue change would need,
+ * not an inference about the code. See
+ * .superpowers/notes/authenticity-research.md §7, finding 1.
+ *
+ * What DOES vary per section on real hardware is which mid-ground layer is
+ * drawn: the distant mountains are always on, and the mid-ground alternates
+ * between rolling hills (bg1) and city ruins (bg2) via the background-control
+ * port. That is the real variety mechanism and it is the NEXT pass's job; the
+ * five-element array shape is kept deliberately so there is somewhere to hook
+ * it in (and so `game.stage`'s existing modulo indexing keeps working).
+ *
+ * Sky is `#000000` — VERIFIED across three captures as 99-100% pure black.
+ * The starfield and the Earth sprite are this remake's ONE intentional
+ * deviation from that; see drawSky and BUILD-LOG.
  */
+const AUTHENTIC_PALETTE = {
+  sky: '#000000',
+  star: '#FFFFFF', // tile-layer white — the one layer that legitimately reaches it
+  far: { e: '#0000FF', m: '#0097AE' },  // blue peaks over a solid teal mass
+  near: { e: '#009700', m: '#00DE51' }, // mid-green ridge over a solid bright-green fill
+  ground: '#FF9751',                    // flat peach regolith, one colour, no shading
+};
+
 export const STAGE_PALETTES = [
-  { // 0 — lunar night: green ranges over a pink dust plain
-    sky: '#05050e', star: '#ffffff',
-    far: { e: '#2f8a45', m: '#1b5c2c', s: '#123f1e', w: '#9fe0b0' },
-    near: { e: '#63d47a', m: '#2f9c46', s: '#1d6b2e', w: '#ffffff' },
-    ground: '#e05098', groundTop: '#ff9ad0', groundShade: '#a83070',
-  },
-  { // 1 — violet night, teal ranges
-    sky: '#0b0320', star: '#dfe8ff',
-    far: { e: '#2a7c8a', m: '#17505c', s: '#0e3540', w: '#a6e6f0' },
-    near: { e: '#46c8c0', m: '#209a92', s: '#12645f', w: '#ffffff' },
-    ground: '#d4489e', groundTop: '#ff92d6', groundShade: '#9c2a78',
-  },
-  { // 2 — pre-dawn blue, slate ranges
-    sky: '#03101f', star: '#cfe4ff',
-    far: { e: '#3a5f9c', m: '#243d68', s: '#172845', w: '#b8cdf0' },
-    near: { e: '#5b8ede', m: '#33609f', s: '#213f6c', w: '#ffffff' },
-    ground: '#c95494', groundTop: '#ffa0d2', groundShade: '#8f3168',
-  },
-  { // 3 — rust dusk, ochre ranges
-    sky: '#1a0508', star: '#ffe0c0',
-    far: { e: '#9a5a24', m: '#6b3a14', s: '#47250c', w: '#f0c08a' },
-    near: { e: '#d88a34', m: '#a85e1c', s: '#743e12', w: '#ffe8c0' },
-    ground: '#e0603c', groundTop: '#ffa070', groundShade: '#a83c22',
-  },
-  { // 4 — the cold void, violet ranges
-    sky: '#050510', star: '#f0d8ff',
-    far: { e: '#6a3f9c', m: '#452668', s: '#2c1745', w: '#d8b8f0' },
-    near: { e: '#9c62d8', m: '#6f3aa8', s: '#4a2474', w: '#ffffff' },
-    ground: '#b84fd0', groundTop: '#e79aff', groundShade: '#7c2f96',
-  },
+  AUTHENTIC_PALETTE, AUTHENTIC_PALETTE, AUTHENTIC_PALETTE,
+  AUTHENTIC_PALETTE, AUTHENTIC_PALETTE,
 ];
 
 const CRATER_SPRITE = {
@@ -267,7 +265,7 @@ function drawTiled(ctx, img, offset, y) {
 // Bitmap-font centered text (see hud.js) — used by every overlay so the
 // attract/game-over/stage-clear screens share the HUD's crisp pixel font
 // instead of the browser's anti-aliased canvas text.
-function centerText(ctx, str, y, color = '#ffffff', scale = 1) {
+function centerText(ctx, str, y, color = '#FFFFFF', scale = 1) {
   const w = textWidth(str, scale);
   drawText(ctx, (VIEW_W - w) / 2, y, str, color, scale);
 }
@@ -278,6 +276,12 @@ function drawCentered(ctx, img, cx, cy) {
 
 // --- layers --------------------------------------------------------------
 
+// The arcade sky is pure black with nothing in it — VERIFIED across three
+// captures, zero star pixels and no celestial body (brief §6.1). The starfield
+// and the Earth are kept anyway as this remake's single deliberate visual
+// addition; the sky colour underneath them is now the authentic #000000, and
+// the Earth sprite was recoloured into the hardware sprite gamut so the
+// deviation is a shape choice rather than a palette one.
 function drawSky(r, pal, camX) {
   const { ctx } = r;
   const M = SHAKE_MARGIN;
@@ -302,6 +306,12 @@ function drawMountains(r, stage, camX) {
   drawTiled(r.ctx, set.near, camX * P_NEAR, GROUND_Y - set.near.height);
 }
 
+// The terrain strip is ONE FLAT COLOUR — `#FF9751` peach regolith, top to
+// bottom. VERIFIED: the arcade ground band is 100% `#FF9751` in a lossless
+// native-resolution capture (brief §6.1 / rank 1). The old highlight line,
+// shade band and procedural dust speckle are gone rather than recoloured:
+// the original lets the undulating profile and the craters carry all the
+// terrain interest, and a flat plain is what makes the magenta buggy pop.
 function drawTerrain(r, game, pal, camX) {
   const { ctx, sprites } = r;
   const bandH = VIEW_H - GROUND_Y;
@@ -309,18 +319,6 @@ function drawTerrain(r, game, pal, camX) {
 
   ctx.fillStyle = pal.ground;
   ctx.fillRect(-M, GROUND_Y, VIEW_W + 2 * M, bandH + M);
-  ctx.fillStyle = pal.groundShade;
-  ctx.fillRect(-M, GROUND_Y + 24, VIEW_W + 2 * M, bandH - 24 + M);
-  ctx.fillStyle = pal.groundTop;
-  ctx.fillRect(-M, GROUND_Y, VIEW_W + 2 * M, 2);
-
-  // Sparse dust speckle, keyed off world x so it scrolls with the ground.
-  ctx.fillStyle = pal.groundShade;
-  const x0 = Math.floor(camX);
-  for (let i = 0; i < VIEW_W; i += 2) {
-    const wx = x0 + i;
-    if (mod(wx * 7, 53) < 2) ctx.fillRect(i, GROUND_Y + 8 + mod(wx, 11), 2, 1);
-  }
 
   const features = featuresInRange(game.terrain, camX - 80, camX + VIEW_W + 80);
   for (const f of features) {
@@ -375,7 +373,7 @@ function drawBombMarkers(r, game, camX) {
     const near = Math.max(0, Math.min(1, 1 - (GROUND_Y - s.y) / BOMB_MARK_FALL));
     const blink = Math.floor(r.tick / (near > 0.55 ? 2 : 5)) % 2 === 0;
     ctx.globalAlpha = (0.3 + 0.55 * near) * (blink ? 1 : 0.4);
-    ctx.fillStyle = '#ff4030';
+    ctx.fillStyle = '#C10000';
     const baseY = GROUND_Y - 1;
     ctx.fillRect(x, baseY, BOMB_MARK_W, 1);
     const tick = 2 + Math.round(5 * near);
@@ -424,7 +422,7 @@ function drawEntities(r, game, camX) {
     if (s.kind === 'bomb') {
       ctx.drawImage(sprites.bomb, sx, sy);
     } else {
-      ctx.fillStyle = s.kind === 'aimed' ? '#ff4030' : '#ffffff';
+      ctx.fillStyle = s.kind === 'aimed' ? '#C10000' : '#C1C8C8';
       ctx.fillRect(sx, sy, 2, 2);
     }
   }
@@ -464,9 +462,9 @@ function drawBoss(r, game, camX) {
   const barW = img.width;
   const barY = sy - 6;
   const pct = Math.max(0, Math.min(1, boss.hp / boss.maxHp));
-  ctx.fillStyle = '#20141c';
+  ctx.fillStyle = '#00001A';
   ctx.fillRect(sx, barY, barW, 3);
-  ctx.fillStyle = boss.phase2 ? '#ff4030' : '#60e060';
+  ctx.fillStyle = boss.phase2 ? '#C10000' : '#00C800';
   ctx.fillRect(sx, barY, Math.round(barW * pct), 3);
 }
 
@@ -616,7 +614,7 @@ function drawScoreTable(ctx, game, rows, y, lineH) {
     const mine = !highlighted && e && game.lastInitials
       && e.initials === game.lastInitials && e.score === game.score;
     if (mine) highlighted = true;
-    const color = mine ? '#ffffff' : (i === 0 ? '#ffe060' : '#7fd8ff');
+    const color = mine ? '#FFFFFF' : (i === 0 ? '#FFFF00' : '#00B8FF');
     centerText(ctx, scoreRow(i + 1, e), y + i * lineH, color, 1);
   }
 }
@@ -631,9 +629,9 @@ function drawEnterScore(ctx, game) {
   ctx.fillStyle = 'rgba(0,0,0,0.65)';
   ctx.fillRect(0, HUD_H, VIEW_W, GROUND_Y - HUD_H);
 
-  centerText(ctx, 'NEW HIGH SCORE', 50, '#3a0f26', 2);
-  centerText(ctx, 'NEW HIGH SCORE', 48, '#ffe060', 2);
-  centerText(ctx, `SCORE ${String(game.score).padStart(6, '0')}`, 74, '#7fd8ff', 1);
+  centerText(ctx, 'NEW HIGH SCORE', 50, '#210000', 2);
+  centerText(ctx, 'NEW HIGH SCORE', 48, '#FFFF00', 2);
+  centerText(ctx, `SCORE ${String(game.score).padStart(6, '0')}`, 74, '#00B8FF', 1);
 
   const entry = game.initialsEntry;
   if (!entry) return;
@@ -649,18 +647,18 @@ function drawEnterScore(ctx, game) {
   for (let i = 0; i < INITIALS_LEN; i++) {
     const active = i === entry.index;
     const done = i < entry.index;
-    let color = '#5a5a78';
-    if (done) color = '#ffffff';
-    if (active) color = blink ? '#ffe060' : '#8a6a20';
+    let color = '#2147AE';
+    if (done) color = '#FFFFFF';
+    if (active) color = blink ? '#FFFF00' : '#976851';
     drawText(ctx, x, y, entry.slots[i], color, scale);
     // Underline caret under the slot being edited.
-    ctx.fillStyle = active ? (blink ? '#ffe060' : '#3a3a5c') : '#3a3a5c';
+    ctx.fillStyle = active ? (blink ? '#FFFF00' : '#2147AE') : '#2147AE';
     ctx.fillRect(x, y + GLYPH_BLOCK_H * scale + 3, GLYPH_BLOCK_W * scale, 2);
     x += pitch;
   }
 
-  centerText(ctx, 'LEFT RIGHT PICK LETTER', 146, '#7fd8ff', 1);
-  centerText(ctx, 'FIRE TO ENTER', 160, '#ffffff', 1);
+  centerText(ctx, 'LEFT RIGHT PICK LETTER', 146, '#00B8FF', 1);
+  centerText(ctx, 'FIRE TO ENTER', 160, '#FFFFFF', 1);
 }
 
 // Full keyboard map, shown on the attract screen (finding I6 — P/R/N/B/C
@@ -680,8 +678,8 @@ function drawOverlays(r, game, screenX, by) {
   if (game.paused) {
     ctx.fillStyle = 'rgba(0,0,0,0.55)';
     ctx.fillRect(0, HUD_H, VIEW_W, GROUND_Y - HUD_H);
-    centerText(ctx, 'PAUSED', 100, '#ffe060', 2);
-    centerText(ctx, 'P TO RESUME   R TO RESTART', 124, '#ffffff', 1);
+    centerText(ctx, 'PAUSED', 100, '#FFFF00', 2);
+    centerText(ctx, 'P TO RESUME   R TO RESTART', 124, '#FFFFFF', 1);
     return;
   }
 
@@ -692,9 +690,9 @@ function drawOverlays(r, game, screenX, by) {
     // it to stay legible against a bright stage palette.
     ctx.fillStyle = 'rgba(0,0,0,0.45)';
     ctx.fillRect(0, HUD_H, VIEW_W, VIEW_H - HUD_H);
-    centerText(ctx, 'LUNAR ROVER', 83, '#3a0f26', 3);
-    centerText(ctx, 'LUNAR ROVER', 81, '#ff8fc8', 3);
-    centerText(ctx, 'RETRO-MOD', 110, '#7fd8ff', 1);
+    centerText(ctx, 'LUNAR ROVER', 83, '#210000', 3);
+    centerText(ctx, 'LUNAR ROVER', 81, '#FF00AE', 3);
+    centerText(ctx, 'RETRO-MOD', 110, '#00B8FF', 1);
 
     // Mode-select menu (Task 13): accel/brake toggle game.menuIndex between
     // CLASSIC (0) and ENDLESS (1) — see state.js's 'attract' case; jump/fire
@@ -704,12 +702,12 @@ function drawOverlays(r, game, screenX, by) {
     const classicSel = game.menuIndex === 0;
     const optW = textWidth('CLASSIC', 1);
     const optX = (VIEW_W - optW) / 2;
-    drawText(ctx, optX, 126, 'CLASSIC', classicSel ? '#ffe060' : '#ffffff', 1);
-    drawText(ctx, optX, 138, 'ENDLESS', classicSel ? '#ffffff' : '#ffe060', 1);
+    drawText(ctx, optX, 126, 'CLASSIC', classicSel ? '#FFFF00' : '#FFFFFF', 1);
+    drawText(ctx, optX, 138, 'ENDLESS', classicSel ? '#FFFFFF' : '#FFFF00', 1);
 
     const blink = Math.floor(game.phaseTimer * 2) % 2 === 0;
     if (blink) {
-      ctx.fillStyle = '#ffe060';
+      ctx.fillStyle = '#FFFF00';
       ctx.fillRect(optX - 10, (classicSel ? 126 : 138) + 1, 4, 4);
     }
 
@@ -719,19 +717,19 @@ function drawOverlays(r, game, screenX, by) {
     const scores = loadScores(classicSel ? 'classic' : 'endless');
     for (let i = 0; i < ATTRACT_TABLE_ROWS; i++) {
       centerText(ctx, scoreRow(i + 1, scores[i]), 152 + i * 10,
-        i === 0 ? '#ffe060' : '#7fd8ff', 1);
+        i === 0 ? '#FFFF00' : '#00B8FF', 1);
     }
 
     if (blink) {
-      centerText(ctx, 'PRESS FIRE', 182, '#ffffff', 1);
+      centerText(ctx, 'PRESS FIRE', 182, '#FFFFFF', 1);
     }
 
     // The full control map, dimmed, below the prompt (finding I6). Drawn over
     // the terrain strip rather than inside the dimmed panel — there is no
     // vertical room left above GROUND_Y, and the dim grey reads fine against
     // the regolith.
-    centerText(ctx, CONTROL_HINTS[0], 206, '#c8d4e0', 1);
-    centerText(ctx, CONTROL_HINTS[1], 216, '#c8d4e0', 1);
+    centerText(ctx, CONTROL_HINTS[0], 206, '#B8FFAE', 1);
+    centerText(ctx, CONTROL_HINTS[1], 216, '#B8FFAE', 1);
     return;
   }
 
@@ -751,21 +749,21 @@ function drawOverlays(r, game, screenX, by) {
     const sc = game.stageClear;
     ctx.fillStyle = 'rgba(0,0,0,0.35)';
     ctx.fillRect(0, HUD_H, VIEW_W, GROUND_Y - HUD_H);
-    centerText(ctx, sc.isCourseEnd ? 'COURSE CLEAR' : 'STAGE CLEAR', 84, '#7fd8ff', 2);
-    centerText(ctx, `BONUS ${sc.paid}`, 110, '#ffe060', 1);
+    centerText(ctx, sc.isCourseEnd ? 'COURSE CLEAR' : 'STAGE CLEAR', 84, '#00B8FF', 2);
+    centerText(ctx, `BONUS ${sc.paid}`, 110, '#FFFF00', 1);
     return;
   }
 
   if (game.phase === 'gameOver') {
     ctx.fillStyle = 'rgba(0,0,0,0.65)';
     ctx.fillRect(0, HUD_H, VIEW_W, GROUND_Y - HUD_H);
-    centerText(ctx, 'GAME OVER', 50, '#ff5000', 2);
+    centerText(ctx, 'GAME OVER', 50, '#FF2100', 2);
     // Task 14: the run's own table, so a fresh entry is visible immediately
     // rather than only after returning to the attract screen.
-    centerText(ctx, `${game.mode} TOP ${GAMEOVER_TABLE_ROWS}`, 76, '#ffffff', 1);
+    centerText(ctx, `${game.mode} TOP ${GAMEOVER_TABLE_ROWS}`, 76, '#FFFFFF', 1);
     drawScoreTable(ctx, game, GAMEOVER_TABLE_ROWS, 90, 11);
     if (Math.floor(game.phaseTimer * 2) % 2 === 0) {
-      centerText(ctx, 'PRESS FIRE', 158, '#ffffff', 1);
+      centerText(ctx, 'PRESS FIRE', 158, '#FFFFFF', 1);
     }
   }
 }

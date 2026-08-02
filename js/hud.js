@@ -4,6 +4,17 @@
 // drawHUD(), which lays out score/high-score/combo/checkpoint/timer/warning
 // lights/A-Z progress bar/lives/power-up within the top HUD_H (36px) strip.
 // May touch canvas (ctx) — this is presentation, not simulation.
+//
+// HUD HEIGHT — DELIBERATE DEVIATION. The arcade panel is 48px of a 248-row
+// frame (19.4%); ours is 36 of 240 (15.0%). It is deliberately NOT grown. The
+// HUD is drawn over the world every frame (see render.js's draw order), and
+// flyer altitudes are absolute constants that know nothing about HUD_H:
+// enemies.js seeds formations at baseY 45-80 and swoopers oscillate that by
+// +/-20, so live, lethal enemies reach y ~= 25. A 46px panel would occlude a
+// further 10px of that airspace on top of the 11px it already hides. The boss
+// sweep geometry (boss.js HOVER_Y = 70) was painstakingly fixed after the boss
+// was once mathematically unhittable; nothing here is worth re-opening that.
+// Gameplay legibility outranks the proportion. See BUILD-LOG.
 
 import { LETTERS, STAGE_BREAKS } from './terrain.js';
 import { loadScores } from './score.js';
@@ -71,7 +82,7 @@ const GLYPH_H = 7;
  * back to a blank space glyph. Returns the x just past the last character,
  * useful for chaining adjacent drawText calls.
  */
-export function drawText(ctx, x, y, str, color = '#ffffff', scale = 1) {
+export function drawText(ctx, x, y, str, color = '#FFFFFF', scale = 1) {
   ctx.fillStyle = color;
   let cx = Math.round(x);
   const y0 = Math.round(y);
@@ -119,17 +130,49 @@ const COMBO_FLASH_TIME = 0.3;
 const POWERUP_MAX = DURATIONS;
 const POWERUP_LETTER = { shield: 'S', rapid: 'R', spread: 'W', hover: 'H' };
 const POWERUP_COLOR = {
-  shield: '#60e0ff', rapid: '#ffe060', spread: '#ff60c0', hover: '#60ff90',
+  shield: '#0021FF', rapid: '#FFFF00', spread: '#FF00AE', hover: '#00B800',
+};
+// Letter ink per chip, so the glyph always has contrast against its own chip.
+const POWERUP_INK = {
+  shield: '#FFFFFF', rapid: '#210000', spread: '#FFFFFF', hover: '#210000',
 };
 
-const LIGHT_ON = { air: '#ff4030', mine: '#ffe060', rear: '#60c0ff' };
-const LIGHT_OFF = { air: '#5a2018', mine: '#5a4c18', rear: '#1c3a54' };
+// --- authentic tile-layer palette ------------------------------------------
+// Every colour below is a VERIFIED entry of the M52 text/tile palette PROM
+// `mpc-4.2a`, decoded from the raw PROM bytes and cross-checked against a
+// lossless native-resolution modern-MAME capture. See
+// .superpowers/notes/authenticity-research.md §3.3 / §6.3.
+//
+// The tile layer has NO pulldown resistor on its DAC, so unlike sprites it
+// genuinely reaches pure #FFFFFF and pure #FF0000. HUD text really is brighter
+// than anything moving in the world — that brightness gap is what makes the
+// panel read as a lit instrument and the sprites as objects out there.
+const PANEL = '#0021FF';      // HUD panel background, blue
+const SUBPANEL = '#00B8FF';   // status sub-panel, cyan
+const INK_RED = '#FF2100';    // red-orange: scores, timer, progress fill
+const INK_YELLOW = '#FFFF00'; // yellow: labels, crown/marker accents
+const INK_DARK = '#210000';   // near-black red: text on the cyan sub-panel
+const INK_WHITE = '#FFFFFF';  // pure white
+
+// Sub-panel geometry. The arcade's cyan window is exactly 128px wide (x
+// 84-211 of a 240px screen — brief §8.5); that literal 128px is kept here,
+// positioned so its centre sits at ~59% of our wider 384px buffer against the
+// arcade's ~61%. It holds the same class of content as the original: the
+// mid-panel status readouts, with score/high-score outside it on the left and
+// the life icons outside it on the right.
+const SUBPANEL_X = 164;
+const SUBPANEL_W = 128;
+const SUBPANEL_Y = 0;
+const SUBPANEL_H = 16;
+
+const LIGHT_ON = { air: INK_RED, mine: INK_YELLOW, rear: PANEL };
+const LIGHT_OFF = { air: INK_DARK, mine: INK_DARK, rear: INK_DARK };
 
 const BAR_START_X = 17;
 const BAR_SPACING = 14; // (VIEW_W - 2*BAR_START_X) / 25, rounded down
-const BAR_BOTTOM_Y = 33; // ticks grow upward from here
-const TICK_H = 3;
-const BREAK_TICK_H = 7;
+const BAR_Y = 29;       // top row of the 4px filled bar
+const BAR_H = 4;        // matches the arcade's 4px-tall progress bar
+const BAR_W = BAR_SPACING * (26 - 1); // A..Z inclusive, 25 gaps
 
 function drawWarningLights(ctx, game, x, y) {
   const blinkOn = Math.floor(hudTime * 8) % 2 === 0;
@@ -143,43 +186,66 @@ function drawWarningLights(ctx, game, x, y) {
   }
 }
 
+/**
+ * The A-Z checkpoint bar. This used to be a row of 26 one-pixel ticks with a
+ * yellow cursor; the arcade's is a SOLID FILLED BAR — red `#FF2100` from the
+ * left edge up to the player's position, cyan `#00B8FF` for the remainder,
+ * with 1px red dividers at the checkpoint positions and the letters above it
+ * in red (brief §6.3, VERIFIED). The filled form reads progress at a glance in
+ * a way the tick row did not, and the fill edge *is* the position marker, so
+ * the separate cursor is gone.
+ */
 function drawProgressBar(ctx, game) {
-  for (let i = 0; i < LETTERS.length; i++) {
+  const last = LETTERS.length - 1;
+  const cp = Math.max(0, Math.min(game.checkpoint, last));
+  const fillW = Math.round((cp / last) * BAR_W);
+
+  ctx.fillStyle = SUBPANEL;
+  ctx.fillRect(BAR_START_X, BAR_Y, BAR_W, BAR_H);
+  ctx.fillStyle = INK_RED;
+  ctx.fillRect(BAR_START_X, BAR_Y, fillW, BAR_H);
+
+  for (const i of STAGE_BREAKS) {
     const x = BAR_START_X + i * BAR_SPACING;
-    const isBreak = STAGE_BREAKS.includes(i);
-    const h = isBreak ? BREAK_TICK_H : TICK_H;
-    ctx.fillStyle = isBreak ? '#7fd8ff' : '#5a5a78';
-    ctx.fillRect(x, BAR_BOTTOM_Y - h, 1, h);
-    if (isBreak) {
-      drawText(ctx, x - 2, BAR_BOTTOM_Y - BREAK_TICK_H - 9, LETTERS[i], '#7fd8ff', 1);
-    }
+    ctx.fillStyle = INK_RED;
+    ctx.fillRect(x, BAR_Y, 1, BAR_H);
+    drawText(ctx, x - 2, BAR_Y - GLYPH_H - 2, LETTERS[i], INK_RED, 1);
   }
-  // Marker: a bright vertical cursor spanning (and overshooting) the tick
-  // at the current checkpoint, so it reads clearly regardless of whether it
-  // lands on a break tick or a plain one.
-  const mx = BAR_START_X + Math.min(game.checkpoint, LETTERS.length - 1) * BAR_SPACING;
-  ctx.fillStyle = '#ffe060';
-  ctx.fillRect(mx, BAR_BOTTOM_Y - BREAK_TICK_H - 2, 1, BREAK_TICK_H + 2);
 }
 
+/**
+ * Life icons. These used to be the buggy SPRITE squashed to 10x5 — which
+ * stopped working the moment the panel went from near-black to `#0021FF`
+ * blue, because the authentic buggy is `#C100AE` magenta and magenta on blue
+ * is nearly unreadable at 5px tall. The arcade draws its life icons in the
+ * TILE layer in red/orange (brief §6.3), so this now paints a red-orange mini
+ * buggy pictogram directly instead of tinting a sprite. `sprites` is kept in
+ * the signature: it is part of drawHUD's contract with render.js and other
+ * HUD elements may want it again.
+ */
 function drawLives(ctx, sprites, game, x, y) {
   const n = Math.min(game.lives, 6);
+  ctx.fillStyle = INK_RED;
   for (let i = 0; i < n; i++) {
-    ctx.drawImage(sprites.buggyBody, x + i * 12, y, 10, 5);
+    const lx = x + i * 12;
+    ctx.fillRect(lx, y, 10, 3);        // hull
+    ctx.fillRect(lx + 1, y + 3, 2, 2); // three wheels, matching the real buggy
+    ctx.fillRect(lx + 4, y + 3, 2, 2);
+    ctx.fillRect(lx + 7, y + 3, 2, 2);
   }
 }
 
 function drawPowerup(ctx, game, x, y) {
   const pu = game.powerup;
   if (!pu) return;
-  const color = POWERUP_COLOR[pu.type] || '#ffffff';
+  const color = POWERUP_COLOR[pu.type] || INK_WHITE;
   ctx.fillStyle = color;
   ctx.fillRect(x, y, 9, 9);
-  drawText(ctx, x + 2, y + 1, POWERUP_LETTER[pu.type] || '?', '#0a0a12', 1);
+  drawText(ctx, x + 2, y + 1, POWERUP_LETTER[pu.type] || '?', POWERUP_INK[pu.type] || INK_DARK, 1);
   if (pu.remaining === Infinity) return; // shield: icon only, no timer
   const max = POWERUP_MAX[pu.type] || 15;
   const frac = Math.max(0, Math.min(1, pu.remaining / max));
-  ctx.fillStyle = '#2a2a3c';
+  ctx.fillStyle = INK_DARK;
   ctx.fillRect(x, y + 10, 9, 2);
   ctx.fillStyle = color;
   ctx.fillRect(x, y + 10, Math.round(9 * frac), 2);
@@ -205,21 +271,26 @@ export function drawHUD(ctx, game, sprites, simDt = DT) {
   prevComboMult = game.combo.mult;
   if (comboFlash > 0) comboFlash = Math.max(0, comboFlash - simDt);
 
-  ctx.fillStyle = '#0a0a12';
+  // Solid blue panel with the cyan status sub-panel inside it. The arcade HUD
+  // is a bright lit instrument, not the dark strip this used to draw.
+  ctx.fillStyle = PANEL;
   ctx.fillRect(0, 0, VIEW_W, HUD_H);
-  ctx.fillStyle = '#3a3a5c';
-  ctx.fillRect(0, HUD_H - 1, VIEW_W, 1);
+  ctx.fillStyle = SUBPANEL;
+  ctx.fillRect(SUBPANEL_X, SUBPANEL_Y, SUBPANEL_W, SUBPANEL_H);
 
-  // 1UP score + combo multiplier
-  const scoreEndX = drawText(ctx, 3, 2, `1UP ${String(game.score).padStart(6, '0')}`, '#ffffff');
+  // 1UP score + combo multiplier. Yellow label, red-orange digits — the same
+  // split the arcade uses for its `1P-` label and player score.
+  const labelEndX = drawText(ctx, 3, 2, '1UP ', INK_YELLOW);
+  const scoreEndX = drawText(ctx, labelEndX, 2, String(game.score).padStart(6, '0'), INK_RED);
   if (game.combo.mult > 1) {
-    drawText(ctx, scoreEndX + 4, 2, `×${game.combo.mult}`, comboFlash > 0 ? '#ffffff' : '#ffe060');
+    drawText(ctx, scoreEndX + 4, 2, `×${game.combo.mult}`, comboFlash > 0 ? INK_WHITE : INK_YELLOW);
   }
 
   // HI + top score for this mode
   const scores = loadScores(game.mode);
   const hi = scores.length ? scores[0].score : 0;
-  drawText(ctx, 100, 2, `HI ${String(hi).padStart(6, '0')}`, '#7fd8ff');
+  const hiEndX = drawText(ctx, 100, 2, 'HI ', INK_YELLOW);
+  drawText(ctx, hiEndX, 2, String(hi).padStart(6, '0'), INK_RED);
 
   const isEndless = game.mode === 'endless';
 
@@ -229,7 +300,8 @@ export function drawHUD(ctx, game, sprites, simDt = DT) {
   // (game.elapsedTotal) instead of being hidden outright.
   const secs = Math.max(0, Math.floor(isEndless ? (game.elapsedTotal || 0) : game.stageTime));
   const timerStr = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
-  drawText(ctx, 170, 2, timerStr, '#ffffff');
+  // Inside the cyan sub-panel, matching the arcade's red-orange `TIME 031`.
+  drawText(ctx, 170, 2, timerStr, INK_RED);
 
   drawWarningLights(ctx, game, 213, 2);
 
@@ -238,11 +310,12 @@ export function drawHUD(ctx, game, sprites, simDt = DT) {
     // endless has no checkpoints (state.js gates the STAGE_BREAKS/
     // checkpoint-letter machinery to mode==='classic').
     const meters = Math.floor(game.buggy.worldX / 10);
-    drawText(ctx, 246, 2, `${String(meters).padStart(4, '0')}M`, '#ffe060', 1);
+    drawText(ctx, 246, 2, `${String(meters).padStart(4, '0')}M`, INK_DARK, 1);
   } else {
-    // Checkpoint letter, large (2x)
+    // Checkpoint letter, large (2x). Near-black on the cyan sub-panel, the
+    // same treatment the arcade gives its `POINT G` target readout.
     const letter = LETTERS[game.checkpoint] || 'A';
-    drawText(ctx, 255, 1, letter, '#ffe060', 2);
+    drawText(ctx, 255, 1, letter, INK_DARK, 2);
   }
 
   drawPowerup(ctx, game, 278, 1);

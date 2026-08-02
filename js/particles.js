@@ -48,10 +48,16 @@ export const PARTICLE_COUNTS = {
 const BOOM_CORE = 5;
 
 // Chunky arcade palettes — few colors, high contrast, no soft gradients.
-const BOOM_COLORS = ['#ffffff', '#ffe060', '#ff9020', '#ff4030'];
-const DUST_COLORS = ['#d8a8c8', '#b08098', '#e8c8dc'];
-const MUZZLE_COLORS = ['#ffffff', '#ffe060'];
-const SPARK_COLORS = ['#ffffff', '#7fd8ff', '#c0f0ff'];
+// Every value is an entry of the M52 SPRITE palette PROM (`mpc-1.1f`), whose
+// DAC carries a 470-ohm pulldown: particles are world-layer effects, so like
+// every other sprite they top out at #C1C8C8 and can never be pure white.
+// The dust ramp is keyed to the terrain strip and moved with it when the
+// ground went from the old hot pink to the authentic #FF9751 peach.
+// See .superpowers/notes/authenticity-research.md §3.1.
+const BOOM_COLORS = ['#C1C8C8', '#C1C800', '#C19000', '#C10000'];
+const DUST_COLORS = ['#C19000', '#845100', '#C1C800'];
+const MUZZLE_COLORS = ['#C1C8C8', '#C1C800'];
+const SPARK_COLORS = ['#C1C8C8', '#3E90C8', '#00AEC8'];
 
 /**
  * @param {number} [max=256] pool capacity — the hard ceiling on particles
@@ -67,7 +73,7 @@ export function createParticles(max = 256) {
       gravity: 0,
       life: 0, maxLife: 0,
       size: 1,
-      color: '#ffffff',
+      color: '#C1C8C8',
     };
   }
   return { max, items, cursor: 0, rngState: 0x9e3779b9 };
@@ -151,7 +157,7 @@ export function emit(pool, kind, x, y) {
           40,
           range(pool, 0.10, 0.20),
           4,
-          rand(pool) < 0.5 ? '#ffffff' : '#ffe060',
+          rand(pool) < 0.5 ? '#C1C8C8' : '#C1C800',
         );
       }
       for (let i = BOOM_CORE; i < PARTICLE_COUNTS.boom; i++) {
