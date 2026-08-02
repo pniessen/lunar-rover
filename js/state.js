@@ -334,8 +334,15 @@ function tickStageClearTally(game) {
 
 /**
  * Ends the stageClear intermission once its tally is fully paid and its
- * timer has elapsed. Non-course-end: bump `stage` and resume play in
- * place. Course-end (Z): rebuild the champion course (courseId 1, fresh —
+ * timer has elapsed. Non-course-end: classic bumps `stage` by one and
+ * resumes play in place; endless instead *recomputes* `stage` from
+ * elapsedTotal via the same `min(4, floor(elapsedTotal/90))` formula
+ * enterEndlessBoss uses — endless has no "next segment" the way classic's
+ * checkpoint index does, so an unconditional `+= 1` here would drift stage
+ * upward forever across repeated boss cycles (5th cycle onward it would
+ * exceed STAGE_PALETTES.length/mountains.length, visually reverting a long
+ * run to the stage-0 look instead of staying capped at the stage-4 theme).
+ * Course-end (Z): rebuild the champion course (courseId 1, fresh —
  * this both starts the champion course the first time and loops it every
  * time after) and reset the run's position/checkpoint/stage cleanly so it
  * restarts at A.
@@ -368,6 +375,10 @@ function finishStageClear(game) {
     game.enemyShots = [];
     game.playerShots = [];
     game.waveTimer = undefined; // spawnDirector lazily re-seeds this on its next call
+  } else if (game.mode === 'endless') {
+    // See the docstring above — recomputed from elapsed time, not bumped,
+    // so it stays capped at 4 no matter how many boss cycles a run sees.
+    game.stage = Math.min(4, Math.floor(game.elapsedTotal / 90));
   } else {
     game.stage += 1;
   }
@@ -395,7 +406,7 @@ function finishStageClear(game) {
  * classic course's 26 checkpoints, which a long-enough endless run would
  * overrun, silently pinning every later respawn to the same stale spot.
  * The boundary is always safe: endless terrain chunks (terrain.js's
- * buildChunkFeatures) keep the first 150px after every CHECKPOINT_SPACING
+ * buildChunkFeatures) keep the first 300px after every CHECKPOINT_SPACING
  * boundary clear, same guarantee the classic checkpoints rely on.
  */
 function respawn(game) {

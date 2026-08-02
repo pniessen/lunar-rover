@@ -135,6 +135,49 @@ test('endless boss difficulty scales off elapsed time (stage = min(4, floor(elap
   assert.equal(g.boss.maxHp, 12 + 2 * 6);
 });
 
+// Regression (review fix round 1): finishStageClear's non-course-end branch
+// used to do an unconditional `game.stage += 1` regardless of mode. In
+// classic that's right (stage tracks segment tier), but endless has no
+// "next segment" — each boss cycle's enterEndlessBoss already *recomputes*
+// stage fresh from elapsedTotal (min(4, floor(elapsedTotal/90))), so an
+// unconditional bump on top of that drifts stage past 4 during the
+// *between-bosses* 'playing' window (it gets silently overwritten back to
+// the correct value the next time a boss triggers, which is why the
+// bug only shows up between fights, not at trigger time — see the
+// per-cycle assertions below). Past STAGE_PALETTES.length/mountains.length
+// that unbounded stage falls back to the stage-0 look, visually reverting
+// a long endless run instead of staying on the stage-4 theme.
+test('endless game.stage stays capped at 4 across many boss cycles', () => {
+  const g = createGame('endless', 1);
+  g.phase = 'playing';
+  g.terrain = { mode: 'test', features: [] };
+
+  for (let cycle = 0; cycle < 6; cycle++) {
+    // Force this cycle's boss to trigger right now (direct state
+    // manipulation, same technique the other endless boss tests use).
+    g.elapsedTotal = g.nextBossAt - DT / 2;
+    step(g);
+    assert.equal(g.phase, 'boss', `cycle ${cycle}: boss should trigger`);
+    assert.ok(g.stage <= 4, `cycle ${cycle}: stage(${g.stage}) must stay <=4 entering the fight`);
+
+    // One-shot kill: line up a lethal player shot on the boss box so it
+    // lands *inside* this same updateGame() call — mirrors boss.test.js's
+    // state.js integration tests (a direct hitBoss() call from outside
+    // updateGame wouldn't be noticed by the 'boss' case's bossWasAlive/
+    // after-null detection that drives the boss -> stageClear transition).
+    g.boss.hp = 1;
+    g.playerShots = [{ x: g.boss.x + 10, y: g.boss.y + 5, vx: 300, vy: 0, dir: 'fwd' }];
+    step(g);
+    assert.equal(g.phase, 'stageClear', `cycle ${cycle}: the boss kill should enter stageClear`);
+
+    stepUntilPhaseChanges(g, noInput, 20000);
+    assert.equal(g.phase, 'playing', `cycle ${cycle}: stageClear should finish back to playing`);
+    assert.ok(g.stage <= 4, `cycle ${cycle}: stage(${g.stage}) must stay <=4 after finishStageClear`);
+  }
+
+  assert.ok(g.elapsedTotal > 540, 'sanity: the loop ran past the 6th 90s boss threshold');
+});
+
 // --- boundary respawn --------------------------------------------------------
 
 test('endless respawn lands on the 1200px boundary at or behind the death worldX', () => {
