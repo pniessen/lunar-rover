@@ -56,7 +56,15 @@ body.touch #touch-ui {
   display: block;
 }
 
-/* Left 40% of the viewport: top half = accelerate, bottom half = brake.
+/* Left 40% of the viewport: a fresh touch in the top half shifts UP one
+   speed band, one in the bottom half shifts DOWN one. Not a throttle — the
+   buggy has a 3-position gearbox (SPEED_BANDS in js/buggy.js, starting at
+   band 1), and updateBuggy reads accel/brake through input.pressed(), which
+   is edge-triggered, so a HELD touch shifts exactly once and then does
+   nothing. Lift and re-tap to shift again. Identical to the keyboard: the
+   browser repeats keydown while a key is held, but input.js's set() only
+   records an edge when the action wasn't already down, so those repeats are
+   swallowed too.
    The half-split is interpreted in JS from touch.clientY, this element
    just defines the hit region. */
 #zone-speed {
