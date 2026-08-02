@@ -1,0 +1,94 @@
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: #000;
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+#viewport {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+}
+
+/* Canvas is letterboxed and centered; actual pixel size is set inline by
+   main.js on boot/resize to the largest multiple of 384x240 that fits. */
+#screen {
+  display: block;
+  background: #000;
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
+}
+
+/* Touch controls: hidden until input.js detects a touchstart and adds
+   the 'touch' class to <body>. */
+#touch-ui {
+  display: none;
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+}
+
+body.touch #touch-ui {
+  display: block;
+}
+
+/* Left 40% of the viewport: top half = accelerate, bottom half = brake.
+   The half-split is interpreted in JS from touch.clientY, this element
+   just defines the hit region. */
+#zone-speed {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 40%;
+  height: 100%;
+  pointer-events: auto;
+}
+
+#btn-jump,
+#btn-fire {
+  position: absolute;
+  bottom: 24px;
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  font: bold 12px monospace;
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#btn-fire {
+  right: 24px;
+}
+
+#btn-jump {
+  right: 108px;
+}
+
+#btn-jump:active,
+#btn-fire:active {
+  background: rgba(255, 255, 255, 0.35);
+}
