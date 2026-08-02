@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import {
   createGame, updateGame, buggyScreenX, qualifiesForHighScore,
   DT, DYING_TIME, RESPAWN_TIME, HIGH_SCORE_SLOTS, INITIALS_LEN,
+  HIT_STOP_ENEMY, HIT_STOP_BOSS, GROUND_Y,
 } from '../js/state.js';
+import { startBoss } from '../js/boss.js';
 import { SPEED_BANDS } from '../js/buggy.js';
 import { checkpointX, CHECKPOINT_SPACING } from '../js/terrain.js';
 import { _setStorage, loadScores } from '../js/score.js';
@@ -262,6 +264,89 @@ test('freeze skips the whole simulation and drains in whole fixed ticks', () => 
 
   step(g);
   assert.ok(g.buggy.worldX > x, 'simulation resumes once freeze hits 0');
+});
+
+// Fix round 1, finding 1: hitBoss() used to set game.freeze itself, but the
+// same updateGame call then routed through setPhase() (enterStageClear, or
+// enterDying in the same-frame death race), which clears freeze — so the boss
+// hit-stop was wiped before any frame could observe it and never fired at all.
+// state.js now applies it AFTER the transition. These two tests pin that down.
+
+/**
+ * Drives `g` into a boss fight and lands the killing blow through the REAL
+ * update path (a player shot colliding with the boss inside updateBoss),
+ * rather than calling hitBoss directly — the bug lived in the interaction
+ * between that call and the phase transition that follows it in the same
+ * updateGame call, so the test has to exercise both.
+ */
+const killBossViaUpdate = (g) => {
+  g.phase = 'boss';
+  g.phaseTimer = 0;
+  startBoss(g);
+  step(g); // one tick so updateBoss positions the boss ahead of the buggy
+  g.boss.hp = 1;
+  // A forward shot sitting on the boss hitbox. updateWeapons (which would
+  // move/cull it) runs after updateBoss in the 'boss' case, so on this tick
+  // the shot is exactly where it was placed.
+  g.playerShots.push({ x: g.boss.x + 4, y: g.boss.y + 4, vx: 0, vy: 0, dir: 'fwd' });
+  step(g); // the killing blow lands, and the phase transition follows it
+};
+
+test('a boss kill freezes the world for a beat, surviving the stageClear transition', () => {
+  const g = createGame('classic', 1);
+  killBossViaUpdate(g);
+
+  assert.equal(g.boss, null, 'boss died this tick');
+  assert.equal(g.phase, 'stageClear', 'and the tally phase was entered');
+  assert.equal(g.freeze, HIT_STOP_BOSS, 'the hit-stop survives the transition');
+
+  // The freeze must actually be observed by the following ticks: nothing
+  // advances while it drains — not the tally, not phaseTimer.
+  const paid0 = g.stageClear.paid;
+  const timer0 = g.phaseTimer;
+  const ticks = Math.ceil(HIT_STOP_BOSS / DT); // 0.08s == 5 fixed ticks
+  for (let i = 0; i < ticks; i++) {
+    assert.ok(g.freeze > 0, `still frozen on tick ${i}`);
+    step(g);
+    assert.equal(g.stageClear.paid, paid0, 'tally is paused by the hit-stop');
+    assert.equal(g.phaseTimer, timer0, 'phaseTimer is paused by the hit-stop');
+  }
+  assert.equal(g.freeze, 0, 'drained after exactly its documented tick count');
+
+  step(g);
+  assert.ok(g.stageClear.paid > paid0, 'the tally resumes once the freeze ends');
+  assert.ok(g.phaseTimer > timer0, 'and so does phaseTimer');
+});
+
+test('the boss hit-stop also survives the same-frame boss/buggy death race', () => {
+  const g = createGame('classic', 1);
+  g.phase = 'boss';
+  g.phaseTimer = 0;
+  startBoss(g);
+  step(g);
+  g.boss.hp = 1;
+  g.playerShots.push({ x: g.boss.x + 4, y: g.boss.y + 4, vx: 0, vy: 0, dir: 'fwd' });
+  // An enemy shot parked on the buggy: updateEnemies kills the buggy earlier
+  // in the very same tick that updateBoss drops the boss.
+  g.enemyShots.push({
+    kind: 'aimed', x: g.buggy.worldX + 8, y: GROUND_Y - 10, vx: 0, vy: 0,
+  });
+  step(g);
+
+  assert.equal(g.boss, null, 'boss died');
+  assert.equal(g.phase, 'dying', 'buggy death takes priority over the boss death');
+  assert.equal(g.bossStageClearCheckpoint, g.checkpoint, 'the stage bonus is only deferred');
+  assert.equal(g.freeze, HIT_STOP_BOSS, 'the hit-stop still survives this transition too');
+});
+
+test('an ordinary buggy death carries no hit-stop', () => {
+  const g = createGame('classic', 1);
+  g.phase = 'playing';
+  g.terrain = craterAt(0);
+  step(g);
+  assert.equal(g.phase, 'dying');
+  assert.equal(g.freeze, 0, 'only kills grant hit-stop, not deaths');
+  assert.equal(HIT_STOP_ENEMY, 0.03);
 });
 
 test('a phase transition cancels any pending freeze', () => {

@@ -37,6 +37,11 @@ export const HUD_H = 36;
 export const HIGH_SCORE_SLOTS = 10; // table depth submitScore() trims to
 export const INITIALS_LEN = 3;
 
+// Hit-stop durations, in seconds (see updateGame's freeze handling). Both are
+// consumed as whole fixed ticks: 0.03 == 2 ticks, 0.08 == 5.
+export const HIT_STOP_ENEMY = 0.03; // set by enemies.js's hitEnemy
+export const HIT_STOP_BOSS = 0.08;  // set below, AFTER the boss-down transition
+
 // Buggy is driven with no-op input during the stageClear intermission — it
 // keeps scrolling for the visual effect, but accel/brake/jump/fire are all
 // ignored (only updateBuggy's dt-driven movement/gravity runs).
@@ -746,6 +751,9 @@ export function updateGame(game, input, dt, seed) {
       if (!game.buggy.alive) {
         if (bossJustDied) game.bossStageClearCheckpoint = game.checkpoint;
         enterDying(game);
+        // See the bossJustDied branch below for why the hit-stop is applied
+        // *after* the transition rather than inside boss.js's hitBoss.
+        if (bossJustDied) game.freeze = HIT_STOP_BOSS;
         break;
       }
 
@@ -757,6 +765,25 @@ export function updateGame(game, input, dt, seed) {
         // isCourseEnd/COURSE_BONUS/champion handling all fall out of
         // enterStageClear() unchanged.
         enterStageClear(game, game.checkpoint);
+        // Boss hit-stop, applied AFTER the phase transition (fix round 1,
+        // finding 1). hitBoss() used to set game.freeze itself, but every
+        // boss death routes through setPhase() later in this same updateGame
+        // call — via enterStageClear here, or enterDying in the same-frame
+        // death race above — and setPhase() clears freeze by design (so a
+        // kill landing on the frame the buggy dies can never leave the new
+        // phase frozen). The freeze was therefore wiped before any later
+        // frame could observe it, and the effect never fired at all.
+        // Setting it here instead means the freeze applies to the NEW phase's
+        // first ticks, which is exactly the intent: the world hangs for 0.08s
+        // on the explosion burst, then the tally starts.
+        //
+        // Consequence, and it is the intended one: updateGame's freeze check
+        // is an early return at the very top, so during those 5 ticks
+        // stageClear's phaseTimer does not advance and tickStageClearTally()
+        // does not pay out. The intermission is simply delayed by 0.08s —
+        // identical semantics to the enemy-kill hit-stop, which likewise
+        // pauses every timer while it drains.
+        game.freeze = HIT_STOP_BOSS;
         break;
       }
 

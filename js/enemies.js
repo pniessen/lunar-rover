@@ -10,7 +10,7 @@
 // function bodies (deferred to call time, after every module has finished
 // loading) — never at this module's top level, the only place a cycle could
 // observe an uninitialized (TDZ) binding. Same pattern as weapons.js.
-import { GROUND_Y } from './state.js';
+import { GROUND_Y, HIT_STOP_ENEMY } from './state.js';
 import {
   GRAVITY, BUGGY_W, BUGGY_H, killBuggy, buggyHitbox,
 } from './buggy.js';
@@ -455,10 +455,13 @@ export function hitEnemy(game, enemy) {
     enemy.x + (ENEMY_W[enemy.kind] ?? 16) / 2,
     enemy.y + (ENEMY_H[enemy.kind] ?? 10) / 2,
   );
-  // Hit-stop (Task 14): a kill freezes the whole simulation for 0.03s so the
+  // Hit-stop (Task 14): a kill freezes the whole simulation briefly so the
   // explosion lands with weight. See updateGame's freeze handling in
-  // state.js — this is consumed as whole fixed ticks, not wall time.
-  game.freeze = 0.03;
+  // state.js — this is consumed as whole fixed ticks, not wall time. Safe to
+  // set here (unlike the boss's, see boss.js's hitBoss): a regular kill does
+  // not itself drive a phase transition, so nothing clears it this frame
+  // except a same-frame buggy death, where losing the freeze is correct.
+  game.freeze = HIT_STOP_ENEMY;
 
   switch (enemy.kind) {
     case 'swooper':

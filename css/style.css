@@ -67,10 +67,12 @@ body.touch #touch-ui {
 
 /* 72px is the minimum comfortable thumb target; both buttons sit inside the
    safe-area inset so a notch/home-indicator never eats them. They are placed
-   from the RIGHT edge and the speed zone from the LEFT (40%), so on the
-   narrowest supported landscape viewport (812x375) the two regions still
-   leave a clear gap: 40% of 812 = 325px of speed zone, buttons occupy
-   x >= 812 - 24 - 72 - 12 - 72 = 632. */
+   from the RIGHT edge (fire at 20px, jump at 104px — a 12px gap between the
+   two 72px circles) and the speed zone from the LEFT (40%), so on the
+   narrowest supported landscape viewport (812x375, zero insets) the two
+   regions still leave a wide gap: the speed zone ends at 40% of 812 = 325px,
+   and the leftmost button (jump) starts at 812 - 104 - 72 = 636px.
+   Measured in-browser at 812x375: zone 0-325, jump 636-708, fire 720-792. */
 #btn-jump,
 #btn-fire {
   position: absolute;

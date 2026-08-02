@@ -292,10 +292,16 @@ export function hitBoss(game, damage = 1) {
   if (b.hp <= 0) {
     game.events.push('bossDown');
     // The big one: render.js maps 'bossDown' to a double boom burst and the
-    // 10px screen shake. Hit-stop is longer than a regular kill's 0.03 —
-    // dropping a mothership should stop the world for a beat.
+    // 10px screen shake.
+    //
+    // The matching hit-stop is NOT set here. It used to be, and it never
+    // fired: state.js's 'boss' case reacts to game.boss going null later in
+    // the same updateGame call by entering stageClear (or dying, in the
+    // same-frame death race), and setPhase() clears game.freeze by design, so
+    // the freeze was wiped before any frame could observe it. state.js now
+    // applies HIT_STOP_BOSS *after* that transition instead — see the
+    // bossJustDied branch there.
     pushFx(game, 'bossDown', b.x + BOSS_W / 2, b.y + BOSS_H / 2);
-    game.freeze = 0.08;
     award(game, 2000 + game.stage * 1000, 'bossKill');
     spawnCapsule(game, b.x, b.y);
     game.boss = null;
