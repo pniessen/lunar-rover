@@ -12,6 +12,7 @@ import {
 } from './terrain.js';
 import { fireDual, updateWeapons } from './weapons.js';
 import { spawnDirector, updateEnemies } from './enemies.js';
+import { updatePowerups } from './powerups.js';
 import { mulberry32 } from './rng.js';
 import {
   award, featuresJumped, stageBonus, SCORES, STAGE_PAR, COURSE_BONUS,
@@ -311,6 +312,7 @@ export function updateGame(game, input, dt) {
       updateEnemies(game, dt);
       if (input.pressed('fire')) fireDual(game);
       updateWeapons(game, dt);
+      updatePowerups(game, dt);
       // updateDrive already handles lives/phase transition for a terrain
       // kill; this catches a kill that happened inside updateEnemies
       // (enemy shot, bomb, or chaser ram) this same frame.
@@ -360,6 +362,11 @@ export function updateGame(game, input, dt) {
       if (input.pressed('fire')) fireDual(game);
       updateWeapons(game, dt);
       updateEnemies(game, dt);
+      // Capsules keep falling and can still be collected while blinking in
+      // (player-friendly); the active power-up's countdown does not tick
+      // here, though — updatePowerups internally gates that to 'playing'
+      // only, mirroring the combo timer's phase gating above.
+      updatePowerups(game, dt);
       if (game.phaseTimer >= RESPAWN_TIME) {
         setPhase(game, 'playing');
         // Discard anything scored/evented across the whole dying+respawning

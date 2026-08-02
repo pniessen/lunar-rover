@@ -16,6 +16,7 @@ import {
 } from './buggy.js';
 import { featuresInRange, addBombCrater } from './terrain.js';
 import { award } from './score.js';
+import { spawnCapsule } from './powerups.js';
 
 // --- tunables --------------------------------------------------------------
 
@@ -467,7 +468,13 @@ export function hitEnemy(game, enemy) {
 
   if (enemy.formationId) {
     const remaining = game.enemies.some((e) => e.formationId === enemy.formationId);
-    if (!remaining) award(game, 1000, 'formation');
+    if (!remaining) {
+      award(game, 1000, 'formation');
+      // 40% chance a formation wipe also drops a power-up capsule, falling
+      // from the position of the last enemy killed. game.waveRng is the
+      // only permitted randomness source, per project convention.
+      if (game.waveRng() < 0.4) spawnCapsule(game, enemy.x, enemy.y);
+    }
   }
 }
 

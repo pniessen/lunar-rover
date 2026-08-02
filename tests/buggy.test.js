@@ -64,6 +64,7 @@ test('createBuggy returns the documented default shape', () => {
   assert.deepEqual(b, {
     worldX: 0, y: 0, vy: 0, band: 1, speed: SPEED_BANDS[1],
     airborne: false, settle: 0, wheelPhase: 0, alive: true, deathCause: null,
+    hoverUsed: false,
   });
 });
 

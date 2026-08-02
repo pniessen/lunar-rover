@@ -8,6 +8,7 @@
 import { LETTERS, STAGE_BREAKS } from './terrain.js';
 import { loadScores } from './score.js';
 import { DT, VIEW_W, HUD_H } from './state.js';
+import { DURATIONS } from './powerups.js';
 
 // --- 5x7 bitmap font -------------------------------------------------------
 // Each glyph is 7 rows of a 5-char string; '#' = lit pixel, '.' = off.
@@ -104,9 +105,11 @@ let prevComboMult = 1;
 let comboFlash = 0;
 
 const COMBO_FLASH_TIME = 0.3;
-// Guessed pip-bar denominators for the power-up countdown until Task 9 wires
-// up real capsule durations; shield has no timer (remaining === Infinity).
-const POWERUP_MAX = { rapid: 15, spread: 15, hover: 15 };
+// Pip-bar denominators for the power-up countdown, sourced directly from
+// powerups.js's DURATIONS so the HUD bar can never drift out of sync with
+// the actual timer it's displaying (shield has no timer — remaining is
+// always Infinity, handled as a special case in drawPowerup below).
+const POWERUP_MAX = DURATIONS;
 const POWERUP_LETTER = { shield: 'S', rapid: 'R', spread: 'W', hover: 'H' };
 const POWERUP_COLOR = {
   shield: '#60e0ff', rapid: '#ffe060', spread: '#ff60c0', hover: '#60ff90',

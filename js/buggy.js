@@ -28,6 +28,7 @@ export function createBuggy() {
     wheelPhase: 0,
     alive: true,
     deathCause: null,
+    hoverUsed: false,
   };
 }
 
@@ -48,10 +49,17 @@ export function updateBuggy(game, input, dt) {
   b.speed = game.speed;
 
   // Jump only from a grounded, settled state — no double jump, no jump
-  // immediately after landing while still settling.
+  // immediately after landing while still settling. The hover power-up
+  // grants exactly one mid-air re-boost per jump (weaker than the initial
+  // launch, at 0.7x JUMP_VY) — it's consumed by hoverUsed and reset on the
+  // next landing, so it can't be chained into a second boost mid-flight.
   if (!b.airborne && b.settle <= 0 && input.pressed('jump')) {
     b.vy = JUMP_VY;
     b.airborne = true;
+    game.events.push('jump');
+  } else if (b.airborne && game.powerup?.type === 'hover' && !b.hoverUsed && input.pressed('jump')) {
+    b.vy = JUMP_VY * 0.7;
+    b.hoverUsed = true;
     game.events.push('jump');
   }
 
@@ -69,6 +77,7 @@ export function updateBuggy(game, input, dt) {
       b.vy = 0;
       b.airborne = false;
       b.settle = SETTLE_TIME;
+      b.hoverUsed = false;
       game.events.push('land');
     }
   } else {
